@@ -1,0 +1,71 @@
+.period-bar {
+  position: sticky;
+  top: calc(0px + var(--safe-top));
+  z-index: 20;
+  margin: 2px -4px 0;
+  padding: 8px 4px 10px;
+  background: linear-gradient(
+    to bottom,
+    var(--bg) 65%,
+    color-mix(in srgb, var(--bg) 75%, transparent)
+  );
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.period-bar__segments {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.period-bar__chip {
+  min-height: var(--hit);
+  border-radius: 12px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.period-bar__chip.is-active {
+  background: #222822;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.period-bar__nav {
+  display: grid;
+  grid-template-columns: var(--hit) 1fr var(--hit);
+  align-items: center;
+  gap: 4px;
+}
+
+.period-bar__chev {
+  width: var(--hit);
+  height: var(--hit);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+}
+
+.period-bar__label {
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

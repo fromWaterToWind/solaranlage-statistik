@@ -1,0 +1,39 @@
+.energy-chart {
+  padding-bottom: 8px;
+}
+
+.energy-chart__frame {
+  width: 100%;
+  min-height: 200px;
+}
+
+.energy-chart__skel {
+  height: 200px;
+  border-radius: 12px;
+}
+
+.energy-chart__tip {
+  background: #121512;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  min-width: 120px;
+}
+
+.energy-chart__tip-label {
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.energy-chart__tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.energy-chart__tip-row + .energy-chart__tip-row {
+  margin-top: 3px;
+}

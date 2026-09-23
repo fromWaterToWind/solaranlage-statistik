@@ -1,0 +1,5 @@
+DOMAIN = "solar_statistik"
+PANEL_URL_PATH = "solar"
+STATIC_URL_PATH = "/solar-statistik"
+PANEL_TITLE = "Solar"
+PANEL_ICON = "mdi:solar-power-variant"

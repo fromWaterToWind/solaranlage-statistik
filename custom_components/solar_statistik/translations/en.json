@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Solar Statistik",
+        "description": "Adds Solar as an app in the sidebar. Open it in the Companion app under Solar."
+      }
+    },
+    "abort": {
+      "already_configured": "Solar Statistik is already set up.",
+      "single_instance_allowed": "Solar Statistik is already set up."
+    }
+  }
+}
