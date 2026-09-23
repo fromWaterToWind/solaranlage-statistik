@@ -27,6 +27,7 @@ export function totalsFromFlows(
     gridImportKwh: Kwh
     gridExportKwh: Kwh
     mppts: MpptTotal[]
+    batteryEnergyFault?: string | null
   },
   tariff: Tariff,
 ): EnergyTotals {
@@ -49,10 +50,11 @@ export function totalsFromFlows(
 
   return {
     productionKwh: flows.productionKwh,
-    mppts: flows.mppts,
+    mppts: flows.mppts.map((m) => ({ ...m, fault: m.fault ?? null })),
     homeKwh: flows.homeKwh,
     batteryChargeKwh: flows.batteryChargeKwh,
     batteryDischargeKwh: flows.batteryDischargeKwh,
+    batteryEnergyFault: flows.batteryEnergyFault ?? null,
     gridImportKwh: flows.gridImportKwh,
     gridExportKwh: flows.gridExportKwh,
     selfConsumedKwh,
@@ -98,4 +100,14 @@ export function formatEur(euros: Euros): string {
 
 export function formatPercent(p: Percent): string {
   return `${dePercent.format(p)} %`
+}
+
+export function formatMeasuredW(watts: Watts, fault: string | null): string {
+  if (fault) return fault
+  return formatKw(watts)
+}
+
+export function formatKwhOrFault(kwh: Kwh, fault: string | null): string {
+  if (fault) return fault
+  return formatKwh(kwh)
 }

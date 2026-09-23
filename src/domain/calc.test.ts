@@ -15,8 +15,8 @@ describe('sumMpptW', () => {
   it('sums MPPT power', () => {
     expect(
       sumMpptW([
-        { id: 'ost', name: 'Ost Dach', powerW: 1200 },
-        { id: 'west', name: 'West Dach', powerW: 800 },
+        { id: 'ost', name: 'Ost Dach', powerW: 1200, fault: null },
+        { id: 'west', name: 'West Dach', powerW: 800, fault: null },
       ]),
     ).toBe(2000)
   })
@@ -33,8 +33,8 @@ describe('totalsFromFlows', () => {
         gridImportKwh: 2,
         gridExportKwh: 8,
         mppts: [
-          { id: 'ost', name: 'Ost Dach', kwh: 13 },
-          { id: 'west', name: 'West Dach', kwh: 12 },
+          { id: 'ost', name: 'Ost Dach', kwh: 13, fault: null },
+          { id: 'west', name: 'West Dach', kwh: 12, fault: null },
         ],
       },
       tariff,

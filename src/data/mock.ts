@@ -148,8 +148,8 @@ function buildLiveAt(now: Date, socPercent: number): LiveSnapshot {
   const dayRand = mulberry32(hashDate(now))()
   const { ost, west } = mpptPowerW(hour, season, dayRand)
   const mppts: MpptLive[] = [
-    { id: MPPT_OST.id, name: MPPT_OST.name, powerW: ost },
-    { id: MPPT_WEST.id, name: MPPT_WEST.name, powerW: west },
+    { id: MPPT_OST.id, name: MPPT_OST.name, powerW: ost, fault: null },
+    { id: MPPT_WEST.id, name: MPPT_WEST.name, powerW: west, fault: null },
   ]
   const pvW = sumMpptW(mppts)
   const homeW = homePowerW(hour, dayRand)
@@ -159,15 +159,20 @@ function buildLiveAt(now: Date, socPercent: number): LiveSnapshot {
     at: now.toISOString(),
     mppts,
     pvW,
+    pvFault: null,
     homeW,
+    homeFault: null,
     battery: {
       socPercent: flows.socPercent,
+      socFault: null,
       chargeW: flows.chargeW,
       dischargeW: flows.dischargeW,
+      fault: null,
     },
     grid: {
       importW: flows.importW,
       exportW: flows.exportW,
+      fault: null,
     },
   }
 }
@@ -293,8 +298,8 @@ function buildTotals(
 ): EnergyTotals {
   const sums = sumSeries(series)
   const mppts: MpptTotal[] = [
-    { id: MPPT_OST.id, name: MPPT_OST.name, kwh: round3(ostKwh) },
-    { id: MPPT_WEST.id, name: MPPT_WEST.name, kwh: round3(westKwh) },
+    { id: MPPT_OST.id, name: MPPT_OST.name, kwh: round3(ostKwh), fault: null },
+    { id: MPPT_WEST.id, name: MPPT_WEST.name, kwh: round3(westKwh), fault: null },
   ]
   return totalsFromFlows(
     {

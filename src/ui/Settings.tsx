@@ -11,7 +11,7 @@ interface SettingsProps {
   onClose: () => void
 }
 
-const ENTITY_FIELDS: { key: keyof EntityMap; label: string }[] = [
+const ENTITY_FIELDS: { key: keyof EntityMap; label: string; hint?: string }[] = [
   { key: 'pv1Power', label: 'PV1 Leistung' },
   { key: 'pv2Power', label: 'PV2 Leistung' },
   { key: 'pv3Power', label: 'PV3 / anderer Speicher' },
@@ -19,7 +19,8 @@ const ENTITY_FIELDS: { key: keyof EntityMap; label: string }[] = [
   { key: 'generationToday', label: 'Erzeugung heute' },
   { key: 'soc', label: 'Batterie SOC' },
   { key: 'batteryPower', label: 'Batterie Leistung (+ Entladen)' },
-  { key: 'homePower', label: 'Hausverbrauch Leistung' },
+  { key: 'gridPower', label: 'Netz Leistung (EcoTracker)', hint: 'positiv = Bezug, negativ = Einspeisung' },
+  { key: 'homePower', label: 'Haus Leistung (optional, leer lassen)' },
   { key: 'homeToday', label: 'Hausverbrauch heute' },
   { key: 'exportToday', label: 'Einspeisung heute' },
   { key: 'importToday', label: 'Netzbezug heute' },
@@ -188,6 +189,7 @@ export function Settings({ config, onSave, onClose }: SettingsProps) {
                 <input
                   type="text"
                   spellCheck={false}
+                  placeholder={f.key === 'homePower' ? 'leer = Speicher ± Netz' : undefined}
                   value={draft.entities[f.key]}
                   onChange={(e) =>
                     setDraft({

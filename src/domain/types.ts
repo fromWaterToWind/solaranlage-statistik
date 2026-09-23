@@ -24,21 +24,27 @@ export interface MpptLive {
   id: string
   name: string
   powerW: Watts
+  fault: string | null
 }
 
 export interface LiveSnapshot {
   at: string // ISO
   mppts: MpptLive[]
-  pvW: Watts // sum of mppts
+  pvW: Watts
+  pvFault: string | null
   homeW: Watts
+  homeFault: string | null
   battery: {
     socPercent: Percent
+    socFault: string | null
     chargeW: Watts
     dischargeW: Watts
+    fault: string | null
   }
   grid: {
     importW: Watts
     exportW: Watts
+    fault: string | null
   }
 }
 
@@ -46,6 +52,7 @@ export interface MpptTotal {
   id: string
   name: string
   kwh: Kwh
+  fault: string | null
 }
 
 export interface EnergyTotals {
@@ -54,6 +61,7 @@ export interface EnergyTotals {
   homeKwh: Kwh
   batteryChargeKwh: Kwh
   batteryDischargeKwh: Kwh
+  batteryEnergyFault: string | null
   gridImportKwh: Kwh
   gridExportKwh: Kwh
   selfConsumedKwh: Kwh
@@ -78,6 +86,7 @@ export interface PowerPoint {
   pvW: Watts
   homeW: Watts
   batteryW: Watts
+  gridW: Watts
 }
 
 export interface PeriodStats {

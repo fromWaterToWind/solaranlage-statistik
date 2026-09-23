@@ -10,7 +10,12 @@ export interface EntityMap {
   soc: string
   /** Positive = discharge to house, negative = charge. */
   batteryPower: string
+  /**
+   * Optional dedicated house-load power sensor. Empty = Speicher ± Netz.
+   */
   homePower: string
+  /** EcoTracker grid power. Positive = import, negative = export. */
+  gridPower: string
   homeToday: string
   exportToday: string
   importToday: string
@@ -31,7 +36,8 @@ export const DEFAULT_ENTITIES: EntityMap = {
   generationToday: 'sensor.gc_0hvrd0zr247t000v_generation_today',
   soc: 'sensor.gc_0hvrd0zr247t000v_soc',
   batteryPower: 'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-  homePower: 'sensor.hausverbrauch',
+  homePower: '',
+  gridPower: 'sensor.ecotracker_power',
   homeToday: 'sensor.hausverbrauch_strom_heute',
   exportToday: 'sensor.ecotracker_einspeisung_heute',
   importToday: 'sensor.ecotracker_netzbezug_heute',
@@ -47,12 +53,24 @@ export const DEFAULT_TARIFF: Tariff = {
 }
 
 const STORAGE_KEY = 'solar-statistik-config-v1'
+const GHOST_HOME = new Set(['sensor.hausverbrauch', 'hausverbrauch'])
 
 export function normalizeEntityId(id: string): string {
   const t = id.trim()
   if (!t) return t
   if (t.includes('.')) return t
   return `sensor.${t}`
+}
+
+function migrateEntities(entities: EntityMap): EntityMap {
+  const next: EntityMap = { ...DEFAULT_ENTITIES, ...entities }
+  if (GHOST_HOME.has(normalizeEntityId(next.homePower))) {
+    next.homePower = ''
+  }
+  if (!next.gridPower.trim()) {
+    next.gridPower = DEFAULT_ENTITIES.gridPower
+  }
+  return next
 }
 
 export function defaultConfig(): AppConfig {
@@ -78,7 +96,7 @@ export function loadConfig(): AppConfig {
     return {
       haUrl: typeof parsed.haUrl === 'string' ? parsed.haUrl : base.haUrl,
       haToken: typeof parsed.haToken === 'string' ? parsed.haToken : base.haToken,
-      entities: { ...base.entities, ...parsed.entities },
+      entities: migrateEntities({ ...base.entities, ...parsed.entities }),
       tariff: {
         buyEurPerKwh: parsed.tariff?.buyEurPerKwh ?? base.tariff.buyEurPerKwh,
         sellEurPerKwh: parsed.tariff?.sellEurPerKwh ?? base.tariff.sellEurPerKwh,

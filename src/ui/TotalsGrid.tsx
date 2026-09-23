@@ -1,4 +1,4 @@
-import { formatKwh } from '@/domain/calc'
+import { formatKwh, formatKwhOrFault } from '@/domain/calc'
 import type { EnergyTotals } from '@/domain/types'
 import './TotalsGrid.css'
 
@@ -11,6 +11,7 @@ interface Row {
   label: string
   value: string
   color: string
+  fault?: boolean
 }
 
 export function TotalsGrid({ totals, loading }: TotalsGridProps) {
@@ -24,9 +25,12 @@ export function TotalsGrid({ totals, loading }: TotalsGridProps) {
 
   const mpptRows: Row[] = totals.mppts.map((m) => ({
     label: m.name,
-    value: formatKwh(m.kwh),
+    value: formatKwhOrFault(m.kwh, m.fault),
     color: 'var(--pv)',
+    fault: Boolean(m.fault),
   }))
+
+  const battFault = totals.batteryEnergyFault
 
   const rows: Row[] = [
     { label: 'Erzeugung', value: formatKwh(totals.productionKwh), color: 'var(--pv)' },
@@ -36,13 +40,15 @@ export function TotalsGrid({ totals, loading }: TotalsGridProps) {
     { label: 'Aus Netz', value: formatKwh(totals.gridImportKwh), color: 'var(--grid-import)' },
     {
       label: 'Batterie laden',
-      value: formatKwh(totals.batteryChargeKwh),
+      value: formatKwhOrFault(totals.batteryChargeKwh, battFault),
       color: 'var(--battery)',
+      fault: Boolean(battFault),
     },
     {
       label: 'Batterie entladen',
-      value: formatKwh(totals.batteryDischargeKwh),
+      value: formatKwhOrFault(totals.batteryDischargeKwh, battFault),
       color: 'var(--battery)',
+      fault: Boolean(battFault),
     },
     {
       label: 'Eigenverbrauch',
@@ -59,7 +65,7 @@ export function TotalsGrid({ totals, loading }: TotalsGridProps) {
           <li key={r.label} className="totals-grid__item">
             <span className="totals-grid__tick" style={{ background: r.color }} />
             <span className="totals-grid__label">{r.label}</span>
-            <span className="totals-grid__value">{r.value}</span>
+            <span className={`totals-grid__value${r.fault ? ' is-fault' : ''}`}>{r.value}</span>
           </li>
         ))}
       </ul>

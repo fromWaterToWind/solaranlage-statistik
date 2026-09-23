@@ -16,18 +16,20 @@ export function MpptRow({ mppts }: MpptRowProps) {
     )
   }
 
-  const maxW = Math.max(...mppts.map((m) => m.powerW), 1)
+  const maxW = Math.max(...mppts.map((m) => (m.fault ? 0 : m.powerW)), 1)
 
   return (
     <section className="mppt-row" aria-label="MPPT Tracker">
       {mppts.map((m) => {
-        const fill = Math.round((m.powerW / maxW) * 100)
+        const fill = m.fault ? 0 : Math.round((m.powerW / maxW) * 100)
         return (
-          <div key={m.id} className="mppt-pill">
+          <div key={m.id} className={`mppt-pill${m.fault ? ' is-fault' : ''}`}>
             <div className="mppt-pill__fill" style={{ width: `${fill}%` }} />
             <div className="mppt-pill__content">
               <span className="mppt-pill__name">{m.name}</span>
-              <span className="mppt-pill__watts">{formatKw(m.powerW)}</span>
+              <span className="mppt-pill__watts">
+                {m.fault ?? formatKw(m.powerW)}
+              </span>
             </div>
           </div>
         )

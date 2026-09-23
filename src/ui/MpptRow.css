@@ -41,6 +41,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+.mppt-pill.is-fault .mppt-pill__watts {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
 .mppt-row__skel {
   height: 52px;
   border-radius: 14px;

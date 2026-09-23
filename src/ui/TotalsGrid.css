@@ -39,6 +39,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+.totals-grid__value.is-fault {
+  color: var(--danger);
+  font-size: 0.82rem;
+}
+
 .totals-grid__skel {
   height: 160px;
   border-radius: 12px;

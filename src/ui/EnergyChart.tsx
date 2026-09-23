@@ -78,6 +78,8 @@ function powerRows(series: PowerPoint[]) {
         hour: '2-digit',
         minute: '2-digit',
       }).format(d),
+      hour: d.getHours(),
+      minute: d.getMinutes(),
       pvW: p.pvW,
       homeW: p.homeW,
       battDischargeW: p.batteryW > 0 ? p.batteryW : 0,
@@ -122,6 +124,9 @@ export function EnergyChart({ kind, series, powerSeries, loading }: EnergyChartP
         </section>
       )
     }
+    const hourTicks = rows
+      .filter((r) => r.minute === 0 && r.hour % 3 === 0)
+      .map((r) => r.label)
     return (
       <section className="card energy-chart" aria-label="Leistungsverlauf">
         <p className="section-label">Verlauf · W · 15 min</p>
@@ -130,11 +135,11 @@ export function EnergyChart({ kind, series, powerSeries, loading }: EnergyChartP
             <ComposedChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <XAxis
                 dataKey="label"
+                ticks={hourTicks}
+                interval={0}
                 tick={{ fill: '#8B958D', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
-                interval={0}
-                tickFormatter={(v: string, i: number) => (i % 4 === 0 ? v : '')}
               />
               <YAxis
                 tick={{ fill: '#8B958D', fontSize: 11 }}
@@ -194,6 +199,13 @@ export function EnergyChart({ kind, series, powerSeries, loading }: EnergyChartP
 
   const rows = energyRows(kind, series)
   const useBars = kind === 'year'
+  const monthTicks =
+    kind === 'month'
+      ? rows.filter((r) => {
+          const day = Number(r.label)
+          return day === 1 || day % 7 === 1
+        }).map((r) => r.label)
+      : undefined
 
   return (
     <section className="card energy-chart" aria-label="Energieverlauf">
@@ -242,11 +254,11 @@ export function EnergyChart({ kind, series, powerSeries, loading }: EnergyChartP
             <ComposedChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <XAxis
                 dataKey="label"
+                ticks={monthTicks}
+                interval={0}
                 tick={{ fill: '#8B958D', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
-                interval={0}
-                tickFormatter={(v: string, i: number) => (i % 5 === 0 ? v : '')}
               />
               <YAxis
                 tick={{ fill: '#8B958D', fontSize: 11 }}

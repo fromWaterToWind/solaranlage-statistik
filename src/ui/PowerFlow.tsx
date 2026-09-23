@@ -1,4 +1,4 @@
-import { formatKw, formatPercent } from '@/domain/calc'
+import { formatKw, formatMeasuredW, formatPercent } from '@/domain/calc'
 import type { LiveSnapshot } from '@/domain/types'
 import './PowerFlow.css'
 
@@ -21,13 +21,11 @@ function FlowEdge({
   color,
   watts,
   maxW,
-  reverse,
 }: {
   d: string
   color: string
   watts: number
   maxW: number
-  reverse?: boolean
 }) {
   const width = strokeFor(watts, maxW)
   if (width <= 0) return null
@@ -42,10 +40,29 @@ function FlowEdge({
       strokeLinecap="round"
       strokeDasharray="6 10"
       style={{
-        animationDirection: reverse ? 'reverse' : 'normal',
         animationDuration: `${Math.max(0.6, 2.2 - width * 0.18)}s`,
       }}
     />
+  )
+}
+
+function NodeValue({
+  text,
+  hero,
+  fault,
+}: {
+  text: string
+  hero?: boolean
+  fault: string | null
+}) {
+  return (
+    <text
+      y={hero ? 72 : 56}
+      textAnchor="middle"
+      className={`power-flow__value${hero ? ' power-flow__value--hero' : ''}${fault ? ' power-flow__value--fault' : ''}`}
+    >
+      {text}
+    </text>
   )
 }
 
@@ -58,29 +75,39 @@ export function PowerFlow({ live }: PowerFlowProps) {
     )
   }
 
-  const { pvW, homeW, battery, grid } = live
-  const chargeW = battery.chargeW
-  const dischargeW = battery.dischargeW
-  const importW = grid.importW
-  const exportW = grid.exportW
+  const { pvW, pvFault, homeW, homeFault, battery, grid } = live
+  const chargeW = battery.fault ? 0 : battery.chargeW
+  const dischargeW = battery.fault ? 0 : battery.dischargeW
+  const importW = grid.fault ? 0 : grid.importW
+  const exportW = grid.fault ? 0 : grid.exportW
 
   const maxW = Math.max(pvW, homeW, chargeW, dischargeW, importW, exportW, 1)
 
-  const pvToHome = Math.max(0, Math.min(pvW, homeW) - dischargeW * 0.15)
   const isExport = exportW >= importW && exportW > FLOW_MIN_W
   const isCharge = chargeW >= dischargeW && chargeW > FLOW_MIN_W
 
   const batteryWatts = isCharge ? chargeW : dischargeW
-  const batterySub = isCharge ? 'Laden' : dischargeW > FLOW_MIN_W ? 'Entladen' : 'Bereit'
-  const batteryDetail =
-    batteryWatts > FLOW_MIN_W ? `${batterySub} · ${formatKw(batteryWatts)}` : batterySub
+  const batterySub = battery.fault
+    ? battery.fault
+    : isCharge
+      ? 'Laden'
+      : dischargeW > FLOW_MIN_W
+        ? 'Entladen'
+        : 'Bereit'
+  const batteryDetail = battery.fault
+    ? battery.fault
+    : batteryWatts > FLOW_MIN_W
+      ? `${batterySub} · ${formatKw(batteryWatts)}`
+      : batterySub
 
-  const gridLabel = isExport
-    ? formatKw(exportW)
-    : importW > FLOW_MIN_W
-      ? formatKw(importW)
-      : '—'
-  const gridSub = isExport ? 'Einspeisung' : importW > FLOW_MIN_W ? 'Bezug' : 'Netz'
+  const gridLabel = grid.fault
+    ? grid.fault
+    : isExport
+      ? formatKw(exportW)
+      : importW > FLOW_MIN_W
+        ? formatKw(importW)
+        : '—'
+  const gridSub = grid.fault ? 'Fehler' : isExport ? 'Einspeisung' : importW > FLOW_MIN_W ? 'Bezug' : 'Netz'
 
   const soc = Math.max(0, Math.min(100, battery.socPercent))
   const fillH = (soc / 100) * 28
@@ -91,41 +118,39 @@ export function PowerFlow({ live }: PowerFlowProps) {
         className="power-flow__svg"
         viewBox="0 0 360 280"
         role="img"
-        aria-label={`PV ${formatKw(pvW)}, Haus ${formatKw(homeW)}`}
+        aria-label={`PV ${formatMeasuredW(pvW, pvFault)}, Haus ${formatMeasuredW(homeW, homeFault)}`}
       >
-        {/* Edges */}
         <FlowEdge
-          d="M180 78 C180 110, 180 120, 180 148"
+          d="M180 82 L180 162"
           color="var(--pv)"
-          watts={pvToHome}
+          watts={pvFault ? 0 : pvW}
           maxW={maxW}
         />
         <FlowEdge
-          d="M148 70 C110 90, 90 120, 88 150"
+          d="M160 200 C120 210, 100 200, 96 176"
           color="var(--battery)"
           watts={chargeW}
           maxW={maxW}
         />
         <FlowEdge
-          d="M88 178 C100 210, 140 220, 160 200"
+          d="M96 176 C100 210, 140 220, 160 200"
           color="var(--battery)"
           watts={dischargeW}
           maxW={maxW}
         />
         <FlowEdge
-          d="M212 70 C250 90, 270 120, 272 150"
+          d="M200 200 C240 210, 260 200, 264 176"
           color="var(--grid-export)"
           watts={exportW}
           maxW={maxW}
         />
         <FlowEdge
-          d="M272 178 C260 210, 220 220, 200 200"
+          d="M264 176 C260 210, 220 220, 200 200"
           color="var(--grid-import)"
           watts={importW}
           maxW={maxW}
         />
 
-        {/* PV node */}
         <g className="power-flow__node" transform="translate(180 48)">
           <circle r="34" fill="#1c211c" stroke="var(--pv)" strokeWidth="1.5" />
           <circle r="8" fill="var(--pv)" />
@@ -151,12 +176,9 @@ export function PowerFlow({ live }: PowerFlowProps) {
           <text y="52" textAnchor="middle" className="power-flow__label">
             Erzeugung
           </text>
-          <text y="72" textAnchor="middle" className="power-flow__value power-flow__value--hero">
-            {formatKw(pvW)}
-          </text>
+          <NodeValue text={formatMeasuredW(pvW, pvFault)} hero fault={pvFault} />
         </g>
 
-        {/* Battery node */}
         <g className="power-flow__node" transform="translate(72 168)">
           <rect
             x="-28"
@@ -168,30 +190,34 @@ export function PowerFlow({ live }: PowerFlowProps) {
             stroke="var(--battery)"
             strokeWidth="1.5"
           />
-          {/* Cell outline */}
           <rect x="-12" y="-18" width="24" height="32" rx="3" fill="none" stroke="var(--battery)" strokeWidth="1.5" />
           <rect x="-5" y="-22" width="10" height="4" rx="1" fill="var(--battery)" />
-          <rect
-            x="-10"
-            y={12 - fillH}
-            width="20"
-            height={fillH}
-            rx="2"
-            fill="var(--battery)"
-            opacity={0.85}
-          />
+          {!battery.socFault ? (
+            <rect
+              x="-10"
+              y={12 - fillH}
+              width="20"
+              height={fillH}
+              rx="2"
+              fill="var(--battery)"
+              opacity={0.85}
+            />
+          ) : null}
           <text y="38" textAnchor="middle" className="power-flow__label">
             Batterie
           </text>
-          <text y="56" textAnchor="middle" className="power-flow__value">
-            {formatPercent(soc)}
+          <text
+            y="56"
+            textAnchor="middle"
+            className={`power-flow__value${battery.socFault ? ' power-flow__value--fault' : ''}`}
+          >
+            {battery.socFault ?? formatPercent(soc)}
           </text>
           <text y="72" textAnchor="middle" className="power-flow__sub">
             {batteryDetail}
           </text>
         </g>
 
-        {/* Home node */}
         <g className="power-flow__node" transform="translate(180 198)">
           <circle r="36" fill="#1c211c" stroke="var(--home)" strokeWidth="1.5" />
           <path
@@ -204,12 +230,9 @@ export function PowerFlow({ live }: PowerFlowProps) {
           <text y="54" textAnchor="middle" className="power-flow__label">
             Verbrauch
           </text>
-          <text y="74" textAnchor="middle" className="power-flow__value power-flow__value--hero">
-            {formatKw(homeW)}
-          </text>
+          <NodeValue text={formatMeasuredW(homeW, homeFault)} hero fault={homeFault} />
         </g>
 
-        {/* Grid node */}
         <g className="power-flow__node" transform="translate(288 168)">
           <rect
             x="-28"
@@ -231,7 +254,11 @@ export function PowerFlow({ live }: PowerFlowProps) {
           <text y="38" textAnchor="middle" className="power-flow__label">
             Netz
           </text>
-          <text y="56" textAnchor="middle" className="power-flow__value">
+          <text
+            y="56"
+            textAnchor="middle"
+            className={`power-flow__value${grid.fault ? ' power-flow__value--fault' : ''}`}
+          >
             {gridLabel}
           </text>
           <text y="72" textAnchor="middle" className="power-flow__sub">
