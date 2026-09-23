@@ -40,14 +40,25 @@ export interface HaClient {
 
 function tryGetHass(): HassLike | null {
   if (typeof window === 'undefined') return null
-  try {
-    const doc = window.parent?.document ?? document
-    const el = doc.querySelector('home-assistant') as { hass?: HassLike } | null
-    if (el?.hass?.states && typeof el.hass.callWS === 'function') {
-      return el.hass
+  let current: Window | null = window
+  for (let i = 0; i < 5 && current; i++) {
+    try {
+      const el = current.document.querySelector('home-assistant') as {
+        hass?: HassLike
+      } | null
+      if (el?.hass?.states && typeof el.hass.callWS === 'function') {
+        return el.hass
+      }
+    } catch {
+      // Cross-origin frame.
     }
-  } catch {
-    // Cross-origin iframe — fall through to token client.
+    try {
+      const parentWin: Window | null =
+        current.parent !== current ? current.parent : null
+      current = parentWin
+    } catch {
+      current = null
+    }
   }
   return null
 }

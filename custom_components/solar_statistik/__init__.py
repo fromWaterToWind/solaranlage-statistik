@@ -41,7 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, _entry: ConfigEntry) -> bool:
             sidebar_title=PANEL_TITLE,
             sidebar_icon=PANEL_ICON,
             module_url=f"{STATIC_URL_PATH}/ha-panel.js",
-            embed_iframe=True,
+            embed_iframe=False,
             require_admin=False,
         )
     except ValueError:
@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, _entry: ConfigEntry) -> bool:
             sidebar_title=PANEL_TITLE,
             sidebar_icon=PANEL_ICON,
             module_url=f"{STATIC_URL_PATH}/ha-panel.js",
-            embed_iframe=True,
+            embed_iframe=False,
             require_admin=False,
         )
     return True
