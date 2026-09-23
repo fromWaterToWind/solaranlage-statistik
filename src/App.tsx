@@ -88,6 +88,7 @@ export default function App() {
           <EnergyChart
             kind={kind}
             series={period?.series ?? null}
+            powerSeries={period?.powerSeries ?? null}
             loading={loadingPeriod}
           />
           <TotalsGrid totals={period?.totals ?? null} loading={loadingPeriod} />

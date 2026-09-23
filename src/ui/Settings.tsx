@@ -15,6 +15,7 @@ const ENTITY_FIELDS: { key: keyof EntityMap; label: string }[] = [
   { key: 'pv1Power', label: 'PV1 Leistung' },
   { key: 'pv2Power', label: 'PV2 Leistung' },
   { key: 'pv3Power', label: 'PV3 / anderer Speicher' },
+  { key: 'solarPower', label: 'PV gesamt (Verlauf, W)' },
   { key: 'generationToday', label: 'Erzeugung heute' },
   { key: 'soc', label: 'Batterie SOC' },
   { key: 'batteryPower', label: 'Batterie Leistung (+ Entladen)' },

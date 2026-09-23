@@ -25,9 +25,10 @@ export function parsePowerW(state: HaState | undefined): number {
   const n = parseNumber(state?.state)
   if (n === null) return 0
   const u = unitOf(state)
-  if (u === 'kw') return n * 1000
-  if (u === 'mw') return n * 1_000_000
-  return n
+  let watts = n
+  if (u === 'kw') watts = n * 1000
+  if (u === 'mw') watts = n * 1_000_000
+  return Math.abs(watts) < 1 ? 0 : watts
 }
 
 export function parseEnergyKwh(state: HaState | undefined): number {

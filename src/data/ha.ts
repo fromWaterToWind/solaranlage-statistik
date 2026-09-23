@@ -10,6 +10,7 @@ import type {
   MpptTotal,
   PeriodKind,
   PeriodStats,
+  PowerPoint,
   SeriesPoint,
   Watts,
 } from '@/domain/types'
@@ -209,6 +210,68 @@ function sumSeries(series: SeriesPoint[]) {
   )
 }
 
+function lookup(states: Record<string, HaState>, id: string): HaState | undefined {
+  const full = eid(id)
+  if (states[full]) return states[full]
+  const tail = full.includes('.') ? full.slice(full.indexOf('.') + 1) : full
+  for (const [key, val] of Object.entries(states)) {
+    if (key.endsWith(`.${tail}`) || key.endsWith(tail)) return val
+  }
+  return undefined
+}
+
+function present(state: HaState | undefined): boolean {
+  return Boolean(state && !isUnavailable(state.state))
+}
+
+function meanToW(row: HaStatRow): Watts {
+  if (typeof row.mean !== 'number' || !Number.isFinite(row.mean)) return 0
+  return Math.abs(row.mean) < 1 ? 0 : row.mean
+}
+
+function bucket15Min(
+  pv: HaStatRow[],
+  home: HaStatRow[],
+  batt: HaStatRow[],
+): PowerPoint[] {
+  const acc = new Map<
+    number,
+    { nPv: number; pv: number; nHome: number; home: number; nBatt: number; batt: number }
+  >()
+
+  const add = (row: HaStatRow, field: 'pv' | 'home' | 'batt', watts: Watts) => {
+    const d = statStart(row)
+    d.setMinutes(Math.floor(d.getMinutes() / 15) * 15, 0, 0)
+    d.setSeconds(0, 0)
+    const k = d.getTime()
+    const cur = acc.get(k) ?? { nPv: 0, pv: 0, nHome: 0, home: 0, nBatt: 0, batt: 0 }
+    if (field === 'pv') {
+      cur.pv += watts
+      cur.nPv += 1
+    } else if (field === 'home') {
+      cur.home += watts
+      cur.nHome += 1
+    } else {
+      cur.batt += watts
+      cur.nBatt += 1
+    }
+    acc.set(k, cur)
+  }
+
+  for (const row of pv) add(row, 'pv', meanToW(row))
+  for (const row of home) add(row, 'home', meanToW(row))
+  for (const row of batt) add(row, 'batt', meanToW(row))
+
+  return [...acc.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([k, v]) => ({
+      t: new Date(k).toISOString(),
+      pvW: v.nPv ? v.pv / v.nPv : 0,
+      homeW: v.nHome ? v.home / v.nHome : 0,
+      batteryW: v.nBatt ? v.batt / v.nBatt : 0,
+    }))
+}
+
 function kwhIfPresent(state: HaState | undefined): number | null {
   if (!state || isUnavailable(state.state)) return null
   return parseEnergyKwh(state)
@@ -218,26 +281,39 @@ function liveFromStates(states: Record<string, HaState>, entities: EntityMap): L
   const mppts: MpptLive[] = MPPT.map((m) => ({
     id: m.id,
     name: m.name,
-    powerW: parsePowerW(states[eid(entities[m.key])]),
+    powerW: parsePowerW(lookup(states, entities[m.key])),
   }))
-  const pvW: Watts = mppts.reduce((s, m) => s + m.powerW, 0)
-  const homeW = parsePowerW(states[eid(entities.homePower)])
-  const socPercent = parseSocPercent(states[eid(entities.soc)])
-  const battSigned = parsePowerW(states[eid(entities.batteryPower)])
+  const solarState = lookup(states, entities.solarPower)
+  const solarW = parsePowerW(solarState)
+  const pvW: Watts = solarW > 0 ? solarW : mppts.reduce((s, m) => s + m.powerW, 0)
+
+  const homeState = lookup(states, entities.homePower)
+  const battState = lookup(states, entities.batteryPower)
+  const homeW = parsePowerW(homeState)
+  const battSigned = parsePowerW(battState)
   const chargeW = battSigned < 0 ? -battSigned : 0
   const dischargeW = battSigned > 0 ? battSigned : 0
 
-  // Grid live is not given — derive from power balance.
-  const gridNet = homeW - pvW - battSigned
-  const importW = gridNet > 30 ? gridNet : 0
-  const exportW = gridNet < -30 ? -gridNet : 0
+  let importW = 0
+  let exportW = 0
+  // Only derive grid when house + battery are actually present — otherwise house load
+  // was wrongly shown as grid import.
+  if (present(homeState) && present(battState)) {
+    const gridNet = homeW - pvW - battSigned
+    if (gridNet > 1) importW = gridNet
+    else if (gridNet < -1) exportW = -gridNet
+  }
 
   return {
     at: new Date().toISOString(),
     mppts,
     pvW,
     homeW,
-    battery: { socPercent, chargeW, dischargeW },
+    battery: {
+      socPercent: parseSocPercent(lookup(states, entities.soc)),
+      chargeW,
+      dischargeW,
+    },
     grid: { importW, exportW },
   }
 }
@@ -324,13 +400,44 @@ export class HomeAssistantEnergySource implements EnergySource {
     }
     const summed = sumSeries(series)
 
+    let powerSeries: PowerPoint[] | undefined
+    if (kind === 'day') {
+      const powerIds = [
+        eid(entities.solarPower),
+        eid(entities.homePower),
+        eid(entities.batteryPower),
+      ]
+      try {
+        const powerStats = await client.statistics(powerIds, start, end, '5minute')
+        powerSeries = bucket15Min(
+          powerStats[powerIds[0]] ?? [],
+          powerStats[powerIds[1]] ?? [],
+          powerStats[powerIds[2]] ?? [],
+        )
+      } catch {
+        powerSeries = []
+      }
+    }
+
+    const finish = (totals: EnergyTotals): PeriodStats => ({
+      kind,
+      start: start.toISOString(),
+      end: new Date(end.getTime() - 1).toISOString(),
+      totals,
+      series,
+      powerSeries,
+    })
+
     // Today: prefer live *_heute counters (more accurate than incomplete hours).
     if (kind === 'day' && isSameDay(date, new Date())) {
       const states = await client.getStates()
-      const productionKwh = kwhIfPresent(states[e.pv]) ?? summed.productionKwh
-      const homeKwh = kwhIfPresent(states[e.home]) ?? summed.homeKwh
-      const gridExportKwh = kwhIfPresent(states[e.exp]) ?? summed.gridExportKwh
-      const gridImportKwh = kwhIfPresent(states[e.imp]) ?? summed.gridImportKwh
+      const productionKwh =
+        kwhIfPresent(lookup(states, entities.generationToday)) ?? summed.productionKwh
+      const homeKwh = kwhIfPresent(lookup(states, entities.homeToday)) ?? summed.homeKwh
+      const gridExportKwh =
+        kwhIfPresent(lookup(states, entities.exportToday)) ?? summed.gridExportKwh
+      const gridImportKwh =
+        kwhIfPresent(lookup(states, entities.importToday)) ?? summed.gridImportKwh
       const totals = totalsFromFlows(
         {
           productionKwh,
@@ -343,16 +450,7 @@ export class HomeAssistantEnergySource implements EnergySource {
         },
         tariff,
       )
-      if (series.length > 1) {
-        totals.savedEur = savingsFromSeries(series, tariff)
-      }
-      return {
-        kind,
-        start: start.toISOString(),
-        end: new Date(end.getTime() - 1).toISOString(),
-        totals,
-        series,
-      }
+      return finish(totals)
     }
 
     const totals: EnergyTotals = totalsFromFlows(
@@ -371,12 +469,6 @@ export class HomeAssistantEnergySource implements EnergySource {
       totals.savedEur = savingsFromSeries(series, tariff)
     }
 
-    return {
-      kind,
-      start: start.toISOString(),
-      end: new Date(end.getTime() - 1).toISOString(),
-      totals,
-      series,
-    }
+    return finish(totals)
   }
 }

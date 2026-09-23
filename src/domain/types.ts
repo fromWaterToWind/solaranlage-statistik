@@ -72,10 +72,19 @@ export interface SeriesPoint {
   gridExportKwh: Kwh
 }
 
+/** 15-minute power samples for the day chart (Watt, not kWh). */
+export interface PowerPoint {
+  t: string
+  pvW: Watts
+  homeW: Watts
+  batteryW: Watts
+}
+
 export interface PeriodStats {
   kind: PeriodKind
   start: string
   end: string
   totals: EnergyTotals
   series: SeriesPoint[]
+  powerSeries?: PowerPoint[]
 }

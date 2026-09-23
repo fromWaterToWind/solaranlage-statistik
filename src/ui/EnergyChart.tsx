@@ -8,22 +8,15 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import type { PeriodKind, SeriesPoint } from '@/domain/types'
+import { formatKw } from '@/domain/calc'
+import type { PeriodKind, PowerPoint, SeriesPoint } from '@/domain/types'
 import './EnergyChart.css'
 
 interface EnergyChartProps {
   kind: PeriodKind
   series: SeriesPoint[] | null
+  powerSeries?: PowerPoint[] | null
   loading: boolean
-}
-
-interface ChartRow {
-  key: string
-  label: string
-  pvKwh: number
-  homeKwh: number
-  gridExportKwh: number
-  gridImportKwh: number
 }
 
 const deKwh = new Intl.NumberFormat('de-DE', {
@@ -43,31 +36,6 @@ function formatAxis(value: number): string {
   return deAxis.format(value)
 }
 
-function toRows(kind: PeriodKind, series: SeriesPoint[]): ChartRow[] {
-  return series.map((p) => {
-    const d = new Date(p.t)
-    let label: string
-    if (kind === 'day') {
-      label = new Intl.DateTimeFormat('de-DE', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }).format(d)
-    } else if (kind === 'month') {
-      label = String(d.getDate())
-    } else {
-      label = new Intl.DateTimeFormat('de-DE', { month: 'short' }).format(d)
-    }
-    return {
-      key: p.t,
-      label,
-      pvKwh: p.pvKwh,
-      homeKwh: p.homeKwh,
-      gridExportKwh: p.gridExportKwh,
-      gridImportKwh: p.gridImportKwh,
-    }
-  })
-}
-
 interface TipEntry {
   name?: string
   value?: number
@@ -79,9 +47,10 @@ interface TipProps {
   active?: boolean
   payload?: TipEntry[]
   label?: string
+  unit: 'W' | 'kWh'
 }
 
-function ChartTooltip({ active, payload, label }: TipProps) {
+function ChartTooltip({ active, payload, label, unit }: TipProps) {
   if (!active || !payload?.length) return null
   return (
     <div className="energy-chart__tip">
@@ -89,15 +58,53 @@ function ChartTooltip({ active, payload, label }: TipProps) {
       {payload.map((entry) => (
         <div key={String(entry.dataKey)} className="energy-chart__tip-row">
           <span style={{ color: entry.color }}>{entry.name}</span>
-          <span>{deKwh.format(entry.value ?? 0)} kWh</span>
+          <span>
+            {unit === 'W'
+              ? formatKw(Math.max(0, entry.value ?? 0))
+              : `${deKwh.format(entry.value ?? 0)} kWh`}
+          </span>
         </div>
       ))}
     </div>
   )
 }
 
-export function EnergyChart({ kind, series, loading }: EnergyChartProps) {
-  if (loading || !series) {
+function powerRows(series: PowerPoint[]) {
+  return series.map((p) => {
+    const d = new Date(p.t)
+    return {
+      key: p.t,
+      label: new Intl.DateTimeFormat('de-DE', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(d),
+      pvW: p.pvW,
+      homeW: p.homeW,
+      battDischargeW: p.batteryW > 0 ? p.batteryW : 0,
+    }
+  })
+}
+
+function energyRows(kind: PeriodKind, series: SeriesPoint[]) {
+  return series.map((p) => {
+    const d = new Date(p.t)
+    let label: string
+    if (kind === 'month') {
+      label = String(d.getDate())
+    } else {
+      label = new Intl.DateTimeFormat('de-DE', { month: 'short' }).format(d)
+    }
+    return {
+      key: p.t,
+      label,
+      pvKwh: p.pvKwh,
+      homeKwh: p.homeKwh,
+    }
+  })
+}
+
+export function EnergyChart({ kind, series, powerSeries, loading }: EnergyChartProps) {
+  if (loading) {
     return (
       <section className="card energy-chart" aria-hidden>
         <div className="skeleton energy-chart__skel" />
@@ -105,8 +112,87 @@ export function EnergyChart({ kind, series, loading }: EnergyChartProps) {
     )
   }
 
-  const rows = toRows(kind, series)
-  const tickEvery = kind === 'day' ? 4 : kind === 'month' ? 5 : 1
+  if (kind === 'day') {
+    const rows = powerRows(powerSeries ?? [])
+    if (rows.length === 0) {
+      return (
+        <section className="card energy-chart">
+          <p className="section-label">Verlauf · W · 15 min</p>
+          <p className="energy-chart__empty">Keine Leistungsdaten für diesen Tag.</p>
+        </section>
+      )
+    }
+    return (
+      <section className="card energy-chart" aria-label="Leistungsverlauf">
+        <p className="section-label">Verlauf · W · 15 min</p>
+        <div className="energy-chart__frame">
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <XAxis
+                dataKey="label"
+                tick={{ fill: '#8B958D', fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                interval={0}
+                tickFormatter={(v: string, i: number) => (i % 4 === 0 ? v : '')}
+              />
+              <YAxis
+                tick={{ fill: '#8B958D', fontSize: 11 }}
+                tickFormatter={formatAxis}
+                axisLine={false}
+                tickLine={false}
+                width={36}
+              />
+              <Tooltip
+                content={<ChartTooltip unit="W" />}
+                cursor={{ stroke: '#2A302B' }}
+              />
+              <Area
+                type="monotone"
+                dataKey="pvW"
+                name="Erzeugung"
+                stroke="#E8B84A"
+                fill="#E8B84A"
+                fillOpacity={0.22}
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="homeW"
+                name="Verbrauch"
+                stroke="#E7EEE8"
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="battDischargeW"
+                name="Batterie"
+                stroke="#3DDC97"
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+    )
+  }
+
+  if (!series || series.length === 0) {
+    return (
+      <section className="card energy-chart">
+        <p className="section-label">Verlauf · kWh</p>
+        <p className="energy-chart__empty">Keine Energiedaten.</p>
+      </section>
+    )
+  }
+
+  const rows = energyRows(kind, series)
   const useBars = kind === 'year'
 
   return (
@@ -131,7 +217,7 @@ export function EnergyChart({ kind, series, loading }: EnergyChartProps) {
                 width={36}
               />
               <Tooltip
-                content={<ChartTooltip />}
+                content={<ChartTooltip unit="kWh" />}
                 cursor={{ fill: 'rgba(42,48,43,0.35)' }}
               />
               <Bar
@@ -160,7 +246,7 @@ export function EnergyChart({ kind, series, loading }: EnergyChartProps) {
                 axisLine={false}
                 tickLine={false}
                 interval={0}
-                tickFormatter={(v: string, i: number) => (i % tickEvery === 0 ? v : '')}
+                tickFormatter={(v: string, i: number) => (i % 5 === 0 ? v : '')}
               />
               <YAxis
                 tick={{ fill: '#8B958D', fontSize: 11 }}
@@ -169,7 +255,7 @@ export function EnergyChart({ kind, series, loading }: EnergyChartProps) {
                 tickLine={false}
                 width={36}
               />
-              <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#2A302B' }} />
+              <Tooltip content={<ChartTooltip unit="kWh" />} cursor={{ stroke: '#2A302B' }} />
               <Area
                 type="monotone"
                 dataKey="pvKwh"
@@ -190,19 +276,6 @@ export function EnergyChart({ kind, series, loading }: EnergyChartProps) {
                 dot={false}
                 isAnimationActive={false}
               />
-              {kind === 'day' ? (
-                <Area
-                  type="monotone"
-                  dataKey="gridImportKwh"
-                  name="Aus Netz"
-                  stroke="#7AA2FF"
-                  fill="#7AA2FF"
-                  fillOpacity={0.12}
-                  strokeWidth={1}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              ) : null}
             </ComposedChart>
           )}
         </ResponsiveContainer>

@@ -6,7 +6,7 @@ interface PowerFlowProps {
   live: LiveSnapshot | null
 }
 
-const FLOW_MIN_W = 30
+const FLOW_MIN_W = 1
 const STROKE_MIN = 1.2
 const STROKE_MAX = 8
 
@@ -30,18 +30,7 @@ function FlowEdge({
   reverse?: boolean
 }) {
   const width = strokeFor(watts, maxW)
-  if (width <= 0) {
-    return (
-      <path
-        d={d}
-        fill="none"
-        stroke={color}
-        strokeWidth={1}
-        strokeOpacity={0.12}
-        strokeLinecap="round"
-      />
-    )
-  }
+  if (width <= 0) return null
 
   return (
     <path
@@ -122,7 +111,6 @@ export function PowerFlow({ live }: PowerFlowProps) {
           color="var(--battery)"
           watts={dischargeW}
           maxW={maxW}
-          reverse
         />
         <FlowEdge
           d="M212 70 C250 90, 270 120, 272 150"
@@ -135,7 +123,6 @@ export function PowerFlow({ live }: PowerFlowProps) {
           color="var(--grid-import)"
           watts={importW}
           maxW={maxW}
-          reverse
         />
 
         {/* PV node */}

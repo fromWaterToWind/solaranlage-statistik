@@ -1,7 +1,7 @@
 import type { HaState } from './haParse'
 import { stateMap } from './haParse'
 
-export type HaPeriod = 'hour' | 'day' | 'month'
+export type HaPeriod = '5minute' | 'hour' | 'day' | 'month'
 
 export interface HaStatRow {
   start: string | number
@@ -112,6 +112,7 @@ class HassParentClient implements HaClient {
       statistic_ids: ids,
       period,
       types: ['change', 'state', 'mean', 'max'],
+      units: { energy: 'kWh', power: 'W' },
     })
   }
 }
@@ -242,6 +243,7 @@ class TokenWsClient implements HaClient {
       statistic_ids: ids,
       period,
       types: ['change', 'state', 'mean', 'max'],
+      units: { energy: 'kWh', power: 'W' },
     })
     return (result as HaStatistics) ?? {}
   }

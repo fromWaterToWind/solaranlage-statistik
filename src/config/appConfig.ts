@@ -4,6 +4,8 @@ export interface EntityMap {
   pv1Power: string
   pv2Power: string
   pv3Power: string
+  /** Inverter AC / total PV power in W — used for the live total and the day chart. */
+  solarPower: string
   generationToday: string
   soc: string
   /** Positive = discharge to house, negative = charge. */
@@ -25,6 +27,7 @@ export const DEFAULT_ENTITIES: EntityMap = {
   pv1Power: 'sensor.gc_0hvrd0zr247t000v_pv1_power',
   pv2Power: 'sensor.gc_0hvrd0zr247t000v_pv2_power',
   pv3Power: 'sensor.gc_0hvrd0zr247t000v_solar_power_other_storage',
+  solarPower: 'sensor.gc_0hvrd0zr247t000v_solar_power',
   generationToday: 'sensor.gc_0hvrd0zr247t000v_generation_today',
   soc: 'sensor.gc_0hvrd0zr247t000v_soc',
   batteryPower: 'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',

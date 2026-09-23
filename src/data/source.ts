@@ -12,12 +12,18 @@ export interface EnergySource {
 }
 
 export function isHaConfigured(config: AppConfig): boolean {
-  return canUseParentHass() || Boolean(config.haToken.trim())
+  return (
+    canUseParentHass() ||
+    Boolean(config.haToken.trim()) ||
+    !import.meta.env.DEV
+  )
 }
 
 export function createEnergySource(config: AppConfig = loadConfig()): EnergySource {
-  if (isHaConfigured(config) || (import.meta.env.VITE_ENERGY_SOURCE ?? '').toLowerCase() === 'ha') {
-    return new HomeAssistantEnergySource(config)
-  }
-  return new MockEnergySource()
+  const demo =
+    import.meta.env.DEV &&
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('demo') === '1'
+  if (demo) return new MockEnergySource()
+  return new HomeAssistantEnergySource(config)
 }
