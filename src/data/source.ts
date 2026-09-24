@@ -5,10 +5,15 @@ import type { AppConfig } from '@/config/appConfig'
 import { loadConfig } from '@/config/appConfig'
 import type { LiveSnapshot, PeriodKind, PeriodStats } from '@/domain/types'
 
+export type PeriodFetchOpts = {
+  /** Month/year hero compare skips power stats so the recorder is not loaded with 5-minute rows. */
+  includePower?: boolean
+}
+
 export interface EnergySource {
   getLive(): Promise<LiveSnapshot>
   subscribeLive(cb: (s: LiveSnapshot) => void): () => void
-  getPeriod(kind: PeriodKind, date: Date): Promise<PeriodStats>
+  getPeriod(kind: PeriodKind, date: Date, opts?: PeriodFetchOpts): Promise<PeriodStats>
 }
 
 export function isHaConfigured(config: AppConfig): boolean {

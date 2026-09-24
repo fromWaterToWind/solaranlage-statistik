@@ -8,7 +8,7 @@
   padding:
     calc(12px + var(--safe-top))
     calc(16px + var(--safe-right))
-    calc(24px + var(--safe-bottom))
+    calc(12px + var(--safe-bottom))
     calc(16px + var(--safe-left));
   background: var(--bg);
   display: flex;
@@ -39,6 +39,14 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.settings__sync {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .settings__hint {
@@ -100,8 +108,93 @@
 }
 
 .settings__save {
+  position: sticky;
+  bottom: calc(8px + var(--safe-bottom));
+  z-index: 3;
   background: #222822;
   font-weight: 600;
+  box-shadow: 0 -12px 24px var(--bg);
+}
+
+.settings__period {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings__period-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.settings__period-dates,
+.settings__period-prices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings__time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings__time select {
+  flex: 1;
+  font: inherit;
+  color: var(--text);
+  background: #111511;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-height: var(--hit);
+  padding: 0 8px;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings__add.is-danger {
+  color: var(--danger);
+}
+
+.settings select {
+  font: inherit;
+  color: var(--text);
+  background: #111511;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-height: var(--hit);
+  padding: 0 10px;
+  font-size: 0.95rem;
+}
+
+.settings__named {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 6px;
+  align-items: end;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings__named .settings__full:nth-child(2) {
+  grid-column: 1;
+}
+
+.settings__named--pv {
+  grid-template-columns: 1fr auto;
+}
+
+.settings__named--pv .settings__full {
+  grid-column: 1;
+}
+
+.settings__named--pv .settings__remove {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .settings__remove {

@@ -1,5 +1,6 @@
-import { sumMpptW, totalsFromFlows } from '@/domain/calc'
+import { kwhFromSoc, sumMpptW, totalsFromFlows } from '@/domain/calc'
 import type {
+  BatteryPartLive,
   EnergyTotals,
   Kwh,
   LiveSnapshot,
@@ -7,14 +8,15 @@ import type {
   MpptTotal,
   PeriodKind,
   PeriodStats,
+  PowerPoint,
   SeriesPoint,
   Tariff,
   Watts,
 } from '@/domain/types'
 import type { EnergySource } from './source'
 
-const MPPT_OST = { id: 'ost', name: 'Ost Dach' } as const
-const MPPT_WEST = { id: 'west', name: 'West Dach' } as const
+const MPPT_OST = { id: 'pv1', name: 'Ost Dach' } as const
+const MPPT_WEST = { id: 'pv2', name: 'West Dach' } as const
 
 const BATTERY_USABLE_KWH = 10
 const LIVE_TICK_MS = 2000
@@ -148,8 +150,24 @@ function buildLiveAt(now: Date, socPercent: number): LiveSnapshot {
   const dayRand = mulberry32(hashDate(now))()
   const { ost, west } = mpptPowerW(hour, season, dayRand)
   const mppts: MpptLive[] = [
-    { id: MPPT_OST.id, name: MPPT_OST.name, powerW: ost, fault: null },
-    { id: MPPT_WEST.id, name: MPPT_WEST.name, powerW: west, fault: null },
+    {
+      id: MPPT_OST.id,
+      name: MPPT_OST.name,
+      powerW: ost,
+      fault: null,
+      tempC: ost > 1 ? Math.round(16 + (ost / 4500) * 22) : 14,
+      tempFault: null,
+      peakW: 4500,
+    },
+    {
+      id: MPPT_WEST.id,
+      name: MPPT_WEST.name,
+      powerW: west,
+      fault: null,
+      tempC: west > 1 ? Math.round(16 + (west / 4000) * 22) : 14,
+      tempFault: null,
+      peakW: 4000,
+    },
   ]
   const pvW = sumMpptW(mppts)
   const homeW = homePowerW(hour, dayRand)
@@ -169,6 +187,32 @@ function buildLiveAt(now: Date, socPercent: number): LiveSnapshot {
       chargeW: flows.chargeW,
       dischargeW: flows.dischargeW,
       fault: null,
+      parts: [
+        {
+          id: 'b1',
+          name: 'Batterie 1',
+          socPercent: clamp(flows.socPercent - 2, 0, 100),
+          socFault: null,
+          tempC: 21,
+          tempFault: null,
+        },
+        {
+          id: 'b2',
+          name: 'Batterie 2',
+          socPercent: flows.socPercent,
+          socFault: null,
+          tempC: 22,
+          tempFault: null,
+        },
+        {
+          id: 'b3',
+          name: 'Batterie 3',
+          socPercent: clamp(flows.socPercent + 1, 0, 100),
+          socFault: null,
+          tempC: 23,
+          tempFault: null,
+        },
+      ] as BatteryPartLive[],
     },
     grid: {
       importW: flows.importW,
@@ -296,6 +340,7 @@ function buildTotals(
   ostKwh: Kwh,
   westKwh: Kwh,
   tariff: Tariff,
+  storage?: { startPercent: number | null; endPercent: number | null },
 ): EnergyTotals {
   const sums = sumSeries(series)
   const mppts: MpptTotal[] = [
@@ -311,9 +356,84 @@ function buildTotals(
       gridImportKwh: round3(sums.gridImportKwh),
       gridExportKwh: round3(sums.gridExportKwh),
       mppts,
+      storageStartKwh: kwhFromSoc(storage?.startPercent, BATTERY_USABLE_KWH),
+      storageEndKwh: kwhFromSoc(storage?.endPercent, BATTERY_USABLE_KWH),
     },
     tariff,
   )
+}
+
+function socEnds(power: PowerPoint[]): { startPercent: number | null; endPercent: number | null } {
+  let startPercent: number | null = null
+  let endPercent: number | null = null
+  for (const p of power) {
+    if (p.socPercent == null || !Number.isFinite(p.socPercent)) continue
+    if (startPercent == null) startPercent = p.socPercent
+    endPercent = p.socPercent
+  }
+  return { startPercent, endPercent }
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
+function dayPowerSeries(date: Date): PowerPoint[] {
+  const now = new Date()
+  const start = startOfDay(date)
+  const end = isSameDay(date, now) ? now : new Date(start.getTime() + 24 * 60 * 60_000)
+  const season = seasonalPvFactor(date.getMonth())
+  const rand = mulberry32(hashDate(date) ^ 0x51ed)
+  let soc = 40 + rand() * 30
+  const out: PowerPoint[] = []
+  for (let t = start.getTime(); t < end.getTime(); t += 15 * 60_000) {
+    const d = new Date(t)
+    const hour = d.getHours() + d.getMinutes() / 60
+    const r = rand()
+    const { ost, west } = mpptPowerW(hour, season, r)
+    const pvW = ost + west
+    const homeW = homePowerW(hour, r)
+    const surplus = pvW - homeW
+    let chargeW = 0
+    let dischargeW = 0
+    let importW = 0
+    let exportW = 0
+    const stepH = 0.25
+    if (surplus > 20 && soc < 95) {
+      chargeW = Math.min(surplus, 3500)
+      exportW = Math.max(0, surplus - chargeW)
+      soc = clamp(soc + (chargeW / 1000 / BATTERY_USABLE_KWH) * 100 * stepH, 15, 95)
+    } else if (surplus < -20 && soc > 15) {
+      dischargeW = Math.min(-surplus, 3500)
+      importW = Math.max(0, -surplus - dischargeW)
+      soc = clamp(soc - (dischargeW / 1000 / BATTERY_USABLE_KWH) * 100 * stepH, 15, 95)
+    } else if (surplus < -20) {
+      importW = -surplus
+    } else if (surplus > 20) {
+      exportW = surplus
+    }
+    const batteryW = dischargeW - chargeW
+    out.push({
+      t: d.toISOString(),
+      pvW,
+      homeW,
+      batteryW,
+      gridW: importW - exportW,
+      mpptW: { pv1: ost, pv2: west },
+      battPartW: {},
+      socPercent: Math.round(soc * 10) / 10,
+      socById: {
+        b1: clamp(soc - 2, 0, 100),
+        b2: soc,
+        b3: clamp(soc + 1, 0, 100),
+      },
+    })
+  }
+  return out
 }
 
 function startOfDay(d: Date): Date {
@@ -360,12 +480,14 @@ export class MockEnergySource implements EnergySource {
   private periodDay(date: Date): PeriodStats {
     const day = startOfDay(date)
     const { series, ostKwh, westKwh } = daySeries(day)
+    const powerSeries = dayPowerSeries(day)
     return {
       kind: 'day',
       start: day.toISOString(),
       end: endOfDay(day).toISOString(),
-      totals: buildTotals(series, ostKwh, westKwh, this.tariff),
+      totals: buildTotals(series, ostKwh, westKwh, this.tariff, socEnds(powerSeries)),
       series,
+      powerSeries,
     }
   }
 
@@ -424,8 +546,8 @@ export class MockEnergySource implements EnergySource {
         gridExportKwh: round3(sums.gridExportKwh),
       })
       for (const m of monthStats.totals.mppts) {
-        if (m.id === 'ost') ostKwh += m.kwh
-        if (m.id === 'west') westKwh += m.kwh
+        if (m.id === 'pv1') ostKwh += m.kwh
+        if (m.id === 'pv2') westKwh += m.kwh
       }
     }
 

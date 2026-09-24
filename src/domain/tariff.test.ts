@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buyPriceAt, savingsFromSeries, weightedBuyPrice } from './tariff'
+import { buyPriceAt, formatDeDate, parseDeDate, savingsFromSeries, sellPriceAt, weightedBuyPrice } from './tariff'
 import type { Tariff } from './types'
 
 const tariff: Tariff = {
@@ -27,6 +27,30 @@ describe('buyPriceAt', () => {
         sellEurPerKwh: 0.08,
       }),
     ).toBe(0.31)
+  })
+
+  it('switches contract on the validFrom date', () => {
+    const dated: Tariff = {
+      periods: [
+        {
+          id: 'a',
+          validFrom: '2025-01-01',
+          validTo: '2026-10-31',
+          buyCtPerKwh: 32,
+          sellCtPerKwh: 8,
+        },
+        {
+          id: 'b',
+          validFrom: '2026-11-01',
+          validTo: null,
+          buyCtPerKwh: 28.15,
+          sellCtPerKwh: 7.5,
+        },
+      ],
+    }
+    expect(buyPriceAt(new Date(2026, 9, 31, 12, 0), dated)).toBeCloseTo(0.32, 5)
+    expect(buyPriceAt(new Date(2026, 10, 1, 0, 0), dated)).toBeCloseTo(0.2815, 5)
+    expect(sellPriceAt(new Date(2026, 10, 1), dated)).toBeCloseTo(0.075, 5)
   })
 })
 
@@ -65,5 +89,17 @@ describe('savingsFromSeries', () => {
     // noon: avoided 1 * 0.32 + export 1 * 0.08 = 0.40
     // night: avoided 0.8 * 0.20 + 0 = 0.16
     expect(saved).toBeCloseTo(0.56, 5)
+  })
+})
+
+describe('German dates', () => {
+  it('formats and parses TT.MM.JJJJ', () => {
+    expect(formatDeDate('2026-11-01')).toBe('01.11.2026')
+    expect(parseDeDate('1.11.2026')).toBe('2026-11-01')
+    expect(parseDeDate('01.11.2026')).toBe('2026-11-01')
+    expect(parseDeDate('24.9.25')).toBe('2025-09-24')
+    expect(parseDeDate('')).toBeNull()
+    expect(parseDeDate('31.02.2026')).toBeNull()
+    expect(parseDeDate('2026-11-01')).toBe('2026-11-01')
   })
 })

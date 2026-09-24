@@ -1,54 +1,36 @@
 .kpi-strip {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.kpi-strip__hero {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 18px 16px;
-}
-
-.kpi-strip__row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 
-.kpi-strip__mini {
+.kpi-strip__tile {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 14px;
+  gap: 6px;
+  padding: 14px 14px 12px;
 }
 
 .kpi-strip__label {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 500;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
 }
 
 .kpi-strip__value {
-  font-size: 1.35rem;
-  font-weight: 600;
+  font-size: 1.12rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
+  line-height: 1.15;
 }
 
-.kpi-strip__value--hero {
-  font-family: var(--font-hero);
-  font-size: 2rem;
-  color: var(--pv);
-  letter-spacing: -0.03em;
-}
-
-.kpi-strip__hero-skel {
-  height: 88px;
-  border-radius: var(--radius);
+.kpi-strip__value.is-fault {
+  color: var(--danger);
+  font-size: 0.82rem;
 }
 
 .kpi-strip__mini-skel {

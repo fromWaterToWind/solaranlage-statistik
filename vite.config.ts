@@ -2,9 +2,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
+import { growattProxy } from './vite.growatt-proxy'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), growattProxy()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -4,6 +4,7 @@ import {
   homeKwhFromShellyAndGrid,
   inverterOutputW,
   lookupState,
+  parseGridPower,
   parseMeasuredPower,
   toWatts,
   floorSubWatt,
@@ -59,6 +60,18 @@ describe('parseMeasuredPower', () => {
   })
 })
 
+describe('parseGridPower', () => {
+  it('treats unknown as 0 W, not a fault', () => {
+    expect(parseGridPower(st('unknown', 'W'))).toEqual({ watts: 0, fault: null })
+    expect(parseGridPower(st('Unknown', 'W'))).toEqual({ watts: 0, fault: null })
+  })
+
+  it('still shows unavailable and missing as faults', () => {
+    expect(parseGridPower(st('unavailable', 'W'))).toEqual({ watts: 0, fault: 'unavailable' })
+    expect(parseGridPower(undefined)).toEqual({ watts: 0, fault: 'fehlt' })
+  })
+})
+
 describe('homeFromShellyAndGrid', () => {
   it('Shelly −815 and EcoTracker −720 is 95 W house load', () => {
     expect(homeFromShellyAndGrid(-815, -720)).toBe(95)
@@ -84,5 +97,16 @@ describe('lookupState', () => {
     }
     states['0'].entity_id = 'sensor.hausverbrauch_strom_heute'
     expect(lookupState(states, 'hausverbrauch_strom_heute')?.state).toBe('12')
+  })
+
+  it('does not borrow another temperature sensor when the entity is missing', () => {
+    const states = {
+      'sensor.gc_0hvrd0zr247t000v_battery1_temp': {
+        entity_id: 'sensor.gc_0hvrd0zr247t000v_battery1_temp',
+        state: '34',
+        attributes: { unit_of_measurement: '°C' },
+      },
+    }
+    expect(lookupState(states, 'sensor.gc_0hvrd0zr247t000v_pv3_temp')).toBeUndefined()
   })
 })

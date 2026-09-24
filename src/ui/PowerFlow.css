@@ -1,73 +1,52 @@
 .power-flow {
-  padding: 10px 10px 8px;
+  padding: 10px 6px 8px;
 }
 
 .power-flow__svg {
   display: block;
   width: 100%;
   height: auto;
+  font-family: var(--font-ui);
+}
+
+.power-flow__flow {
+  animation: flow-dash 3.1s linear infinite;
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -17;
+  }
+}
+
+.power-flow__node {
+  pointer-events: none;
 }
 
 .power-flow__name {
   fill: var(--muted);
-  font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 8.5px;
   font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .power-flow__num {
   fill: var(--text);
-  font-family: var(--font-ui);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
 .power-flow__num.is-fault {
   fill: var(--danger);
-  font-size: 11px;
+  font-size: 9px;
 }
 
 .power-flow__hint {
   fill: var(--muted);
-  font-family: var(--font-ui);
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 400;
-}
-
-.power-flow__chip {
-  font-family: var(--font-ui);
-  font-size: 9px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.power-flow__edge {
-  animation: flow-dash linear infinite;
-}
-
-@keyframes flow-dash {
-  to {
-    stroke-dashoffset: -26;
-  }
-}
-
-.power-flow__output {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin: 2px 2px 0;
-  padding: 6px 4px 0;
-  border-top: 1px solid var(--border);
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-.power-flow__output span:last-child {
-  color: var(--text);
-  font-size: 0.92rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
 }
 
 .power-flow--skeleton {
@@ -76,6 +55,6 @@
 
 .power-flow__skel {
   width: 100%;
-  height: 200px;
+  height: 220px;
   border-radius: 12px;
 }

@@ -34,6 +34,7 @@ export interface HaClient {
     start: Date,
     end: Date,
     period: HaPeriod,
+    types?: string[],
   ): Promise<HaStatistics>
 }
 
@@ -73,19 +74,31 @@ function toWsUrl(httpUrl: string): string {
 
 class HassParentClient implements HaClient {
   private cached: Record<string, HaState> = {}
+  private readonly watch: Set<string>
 
-  constructor(private readonly hass: HassLike) {}
+  constructor(
+    private readonly hass: HassLike,
+    watchedIds: string[] = [],
+  ) {
+    this.watch = new Set(watchedIds.filter(Boolean))
+  }
 
   async getStates(): Promise<Record<string, HaState>> {
-    const fromHass = indexStates(this.hass.states)
-    if (Object.keys(fromHass).length > 0) {
-      this.cached = fromHass
-      return fromHass
+    const picked = pickWatched(this.hass.states, this.watch)
+    if (Object.keys(picked).length > 0) {
+      this.cached = { ...this.cached, ...picked }
+      return this.cached
     }
     if (Object.keys(this.cached).length > 0) return this.cached
+    const fromHass = indexStates(this.hass.states)
+    if (Object.keys(fromHass).length > 0) {
+      this.cached = this.watch.size ? pickWatched(fromHass, this.watch) : fromHass
+      return this.cached
+    }
     try {
       const list = await this.hass.callWS<HaState[]>({ type: 'get_states' })
-      this.cached = indexStates(list)
+      const all = indexStates(list)
+      this.cached = this.watch.size ? pickWatched(all, this.watch) : all
     } catch {
       this.cached = {}
     }
@@ -94,14 +107,27 @@ class HassParentClient implements HaClient {
 
   subscribe(onChange: () => void): () => void {
     let unsub: (() => void) | undefined
+    let poll: number | undefined
+    let trailing: number | undefined
+    let eventsOk = false
+    const notify = () => {
+      if (trailing != null) return
+      trailing = window.setTimeout(() => {
+        trailing = undefined
+        onChange()
+      }, 400)
+    }
     void this.getStates().then(() => onChange())
     const conn = this.hass.connection
     if (conn?.subscribeEvents) {
       void conn
         .subscribeEvents((event: unknown) => {
           const ns = (event as { data?: { new_state?: HaState } })?.data?.new_state
-          if (ns?.entity_id) this.cached[ns.entity_id] = ns
-          onChange()
+          if (!ns?.entity_id) return
+          if (this.watch.size && !this.watch.has(ns.entity_id)) return
+          this.cached[ns.entity_id] = ns
+          eventsOk = true
+          notify()
         }, 'state_changed')
         .then((fn) => {
           unsub = fn
@@ -110,11 +136,16 @@ class HassParentClient implements HaClient {
           /* polling fallback below */
         })
     }
-    const poll = window.setInterval(() => {
-      void this.getStates().then(() => onChange())
-    }, 2000)
+    const watchdog = window.setTimeout(() => {
+      if (eventsOk) return
+      poll = window.setInterval(() => {
+        void this.getStates().then(() => onChange())
+      }, 15_000)
+    }, 4_000)
     return () => {
-      window.clearInterval(poll)
+      window.clearTimeout(watchdog)
+      if (trailing != null) window.clearTimeout(trailing)
+      if (poll != null) window.clearInterval(poll)
       unsub?.()
     }
   }
@@ -124,6 +155,7 @@ class HassParentClient implements HaClient {
     start: Date,
     end: Date,
     period: HaPeriod,
+    types: string[] = ['change', 'state', 'mean', 'max'],
   ): Promise<HaStatistics> {
     return this.hass.callWS<HaStatistics>({
       type: 'recorder/statistics_during_period',
@@ -131,7 +163,7 @@ class HassParentClient implements HaClient {
       end_time: end.toISOString(),
       statistic_ids: ids,
       period,
-      types: ['change', 'state', 'mean', 'max'],
+      types,
       units: { energy: 'kWh', power: 'W' },
     })
   }
@@ -147,11 +179,15 @@ class TokenWsClient implements HaClient {
   private states: Record<string, HaState> = {}
   private listeners = new Set<() => void>()
   private ready: Promise<void>
+  private readonly watch: Set<string>
+  private emitTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(
     private readonly url: string,
     private readonly token: string,
+    watchedIds: string[] = [],
   ) {
+    this.watch = new Set(watchedIds.filter(Boolean))
     this.ready = this.connect()
   }
 
@@ -182,7 +218,8 @@ class TokenWsClient implements HaClient {
         if (msg.type === 'auth_ok') {
           resolve()
           void this.send('get_states').then((list) => {
-            this.states = stateMap(list as HaState[])
+            const all = stateMap(list as HaState[])
+            this.states = this.watch.size ? pickWatched(all, this.watch) : all
             this.emit()
           })
           void this.send('subscribe_events', { event_type: 'state_changed' })
@@ -195,8 +232,10 @@ class TokenWsClient implements HaClient {
         if (msg.type === 'event') {
           const next = msg.event?.data?.new_state
           if (next?.entity_id) {
-            this.states[next.entity_id] = next
-            this.emit()
+            if (!this.watch.size || this.watch.has(next.entity_id)) {
+              this.states[next.entity_id] = next
+              this.emit()
+            }
           }
           return
         }
@@ -222,7 +261,11 @@ class TokenWsClient implements HaClient {
   }
 
   private emit() {
-    for (const l of this.listeners) l()
+    if (this.emitTimer != null) return
+    this.emitTimer = setTimeout(() => {
+      this.emitTimer = undefined
+      for (const l of this.listeners) l()
+    }, 400)
   }
 
   private async send(type: string, extra: Record<string, unknown> = {}): Promise<unknown> {
@@ -256,22 +299,27 @@ class TokenWsClient implements HaClient {
     start: Date,
     end: Date,
     period: HaPeriod,
+    types: string[] = ['change', 'state', 'mean', 'max'],
   ): Promise<HaStatistics> {
     const result = await this.send('recorder/statistics_during_period', {
       start_time: start.toISOString(),
       end_time: end.toISOString(),
       statistic_ids: ids,
       period,
-      types: ['change', 'state', 'mean', 'max'],
+      types,
       units: { energy: 'kWh', power: 'W' },
     })
     return (result as HaStatistics) ?? {}
   }
 }
 
-export function createHaClient(haUrl: string, haToken: string): HaClient {
+export function createHaClient(
+  haUrl: string,
+  haToken: string,
+  watchedIds: string[] = [],
+): HaClient {
   const hass = tryGetHass()
-  if (hass) return new HassParentClient(hass)
+  if (hass) return new HassParentClient(hass, watchedIds)
 
   const url = haUrl.trim() || (import.meta.env.VITE_HA_URL ?? '')
   const token = haToken.trim() || (import.meta.env.VITE_HA_TOKEN ?? '')
@@ -280,9 +328,27 @@ export function createHaClient(haUrl: string, haToken: string): HaClient {
       'Home Assistant: In der Companion-App als Sidebar öffnen, oder URL und Token in den Einstellungen eintragen.',
     )
   }
-  return new TokenWsClient(url, token)
+  return new TokenWsClient(url, token, watchedIds)
 }
 
 export function canUseParentHass(): boolean {
   return tryGetHass() !== null
+}
+
+function pickWatched(
+  raw: unknown,
+  watch: Set<string>,
+): Record<string, HaState> {
+  if (!raw || typeof raw !== 'object') return {}
+  const src = raw as Record<string, HaState>
+  if (!watch.size) return indexStates(raw)
+  const map: Record<string, HaState> = {}
+  for (const id of watch) {
+    const direct = src[id]
+    if (direct && direct.state !== undefined) {
+      map[id] = direct
+      continue
+    }
+  }
+  return map
 }

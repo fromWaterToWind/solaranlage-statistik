@@ -43,3 +43,49 @@
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+.energy-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.energy-chart__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.energy-chart__chip::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chip, var(--muted));
+}
+
+.energy-chart__chip.is-off {
+  color: var(--muted);
+}
+
+.energy-chart__chip-kwh {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.energy-chart__chip.is-off .energy-chart__chip-kwh {
+  color: var(--muted);
+  opacity: 0.7;
+}

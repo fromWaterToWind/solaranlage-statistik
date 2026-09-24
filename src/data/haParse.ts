@@ -52,6 +52,13 @@ export function parseMeasuredPower(state: HaState | undefined): MeasuredW {
   return { watts: floorSubWatt(toWatts(n, unitOf(state))), fault: null }
 }
 
+/** EcoTracker often reports `unknown` at idle; that is 0 W, not a fault. */
+export function parseGridPower(state: HaState | undefined): MeasuredW {
+  const raw = state?.state?.trim().toLowerCase()
+  if (raw === 'unknown') return { watts: 0, fault: null }
+  return parseMeasuredPower(state)
+}
+
 export function parseEnergyKwh(state: HaState | undefined): number {
   const n = parseNumber(state?.state)
   if (n === null) return 0
@@ -68,6 +75,16 @@ export function parseSocPercent(state: HaState | undefined): { percent: number; 
   if (n === null) return { percent: 0, fault: state.state }
   if (n >= 0 && n <= 1.5) return { percent: n * 100, fault: null }
   return { percent: Math.min(100, Math.max(0, n)), fault: null }
+}
+
+export function parseTempC(state: HaState | undefined): { tempC: number | null; fault: string | null } {
+  if (!state) return { tempC: null, fault: 'fehlt' }
+  if (isUnavailable(state.state)) return { tempC: null, fault: state.state }
+  const n = parseNumber(state.state)
+  if (n === null) return { tempC: null, fault: state.state }
+  const u = unitOf(state)
+  const c = u === '°f' || u === 'f' ? ((n - 32) * 5) / 9 : n
+  return { tempC: Math.round(c * 10) / 10, fault: null }
 }
 
 export function stateMap(states: HaState[]): Record<string, HaState> {
@@ -101,14 +118,10 @@ export function lookupState(states: Record<string, HaState>, id: string): HaStat
   const full = t.includes('.') ? t : `sensor.${t}`
   if (states[full]) return states[full]
   const lower = full.toLowerCase()
-  const tail = (full.includes('.') ? full.slice(full.indexOf('.') + 1) : full).toLowerCase()
   for (const [key, val] of Object.entries(states)) {
     const k = key.toLowerCase()
     const vid = (val.entity_id ?? '').toLowerCase()
     if (k === lower || vid === lower) return val
-    if (tail && (k.endsWith(`.${tail}`) || k.endsWith(tail) || vid.endsWith(`.${tail}`))) {
-      return val
-    }
   }
   return undefined
 }

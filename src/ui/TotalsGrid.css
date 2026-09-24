@@ -1,41 +1,40 @@
-.totals-grid__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.totals-grid__tiles {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px 14px;
+  gap: 10px;
 }
 
-.totals-grid__item {
+.totals-grid__tile {
   display: grid;
-  grid-template-columns: 8px 1fr;
+  grid-template-columns: 6px 1fr;
   grid-template-rows: auto auto;
-  column-gap: 8px;
-  row-gap: 2px;
-  align-items: start;
+  column-gap: 10px;
+  row-gap: 4px;
+  padding: 12px 12px 11px;
   min-width: 0;
 }
 
 .totals-grid__tick {
   grid-row: 1 / span 2;
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  align-self: stretch;
   border-radius: 2px;
-  margin-top: 5px;
 }
 
 .totals-grid__label {
-  font-size: 0.78rem;
+  font-size: 0.68rem;
+  font-weight: 500;
   color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .totals-grid__value {
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 1.05rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -45,6 +44,12 @@
 }
 
 .totals-grid__skel {
-  height: 160px;
-  border-radius: 12px;
+  height: 72px;
+  border-radius: var(--radius);
+}
+
+.totals-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }

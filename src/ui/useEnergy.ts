@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AppConfig } from '@/config/appConfig'
+import { applyGrowattDay, fetchGrowattDay, isBeforeNexa } from '@/data/growatt'
+import { formatDay, getGrowattDay } from '@/data/growattStore'
 import { createEnergySource } from '@/data/source'
+import { mergeManualPeriod, type ManualMonth } from '@/domain/manualMonth'
+import {
+  buildProductionCompare,
+  stubPeriodStats,
+  type ProductionCompare,
+} from '@/domain/productionCompare'
 import type { LiveSnapshot, PeriodKind, PeriodStats } from '@/domain/types'
 
 function startOfToday(): Date {
@@ -68,16 +76,23 @@ export interface EnergyState {
   goNext: () => void
   nextDisabled: boolean
   periodLabel: string
+  growattBusy: boolean
+  loadGrowatt: () => void
+  production: ProductionCompare | null
+  loadingProduction: boolean
 }
 
-export function useEnergy(config: AppConfig): EnergyState {
+export function useEnergy(config: AppConfig, manualMonths: ManualMonth[] = []): EnergyState {
   const source = useMemo(() => createEnergySource(config), [config])
   const [live, setLive] = useState<LiveSnapshot | null>(null)
-  const [period, setPeriod] = useState<PeriodStats | null>(null)
+  const [haPeriod, setHaPeriod] = useState<PeriodStats | null>(null)
   const [kind, setKindState] = useState<PeriodKind>('day')
   const [date, setDate] = useState<Date>(startOfToday)
   const [loadingPeriod, setLoadingPeriod] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [growattBusy, setGrowattBusy] = useState(false)
+  const [production, setProduction] = useState<ProductionCompare | null>(null)
+  const [loadingProduction, setLoadingProduction] = useState(true)
 
   useEffect(() => {
     return source.subscribeLive(setLive)
@@ -85,13 +100,57 @@ export function useEnergy(config: AppConfig): EnergyState {
 
   useEffect(() => {
     let cancelled = false
+    const now = new Date()
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15)
+    setLoadingProduction(true)
+    void Promise.allSettled([
+      source.getPeriod('day', now),
+      source.getPeriod('month', now, { includePower: false }),
+      source.getPeriod('month', lastMonth, { includePower: false }),
+    ]).then(([todayRes, thisMonthRes, prevMonthRes]) => {
+      if (cancelled) return
+      if (todayRes.status !== 'fulfilled') {
+        setProduction(null)
+        setLoadingProduction(false)
+        return
+      }
+      const todayMerged = mergeManualPeriod(todayRes.value, manualMonths, config.tariff, now)
+      const thisMonth =
+        thisMonthRes.status === 'fulfilled'
+          ? thisMonthRes.value
+          : stubPeriodStats('month', now)
+      const prevMonth =
+        prevMonthRes.status === 'fulfilled'
+          ? prevMonthRes.value
+          : stubPeriodStats('month', lastMonth)
+      setProduction(buildProductionCompare(todayMerged, thisMonth, prevMonth, now))
+      setLoadingProduction(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [source, manualMonths, config.tariff])
+
+  useEffect(() => {
+    let cancelled = false
     setLoadingPeriod(true)
     setError(null)
     void source
       .getPeriod(kind, date)
-      .then((stats) => {
+      .then(async (stats) => {
+        if (cancelled) return
+        if (kind === 'day') {
+          const stored = await getGrowattDay(formatDay(date))
+          if (stored?.points.length) {
+            stats = {
+              ...stats,
+              powerSeries: applyGrowattDay(stats.powerSeries, stored.points, date),
+              growattNote: stats.growattNote ?? `Lokal · ${stored.points.length} Growatt-Punkte`,
+            }
+          }
+        }
         if (!cancelled) {
-          setPeriod(stats)
+          setHaPeriod(stats)
           setLoadingPeriod(false)
         }
       })
@@ -105,6 +164,11 @@ export function useEnergy(config: AppConfig): EnergyState {
       cancelled = true
     }
   }, [kind, date, source])
+
+  const period = useMemo(
+    () => (haPeriod ? mergeManualPeriod(haPeriod, manualMonths, config.tariff, date) : null),
+    [haPeriod, manualMonths, config.tariff, date],
+  )
 
   const setKind = useCallback((next: PeriodKind) => {
     setKindState(next)
@@ -122,6 +186,44 @@ export function useEnergy(config: AppConfig): EnergyState {
     })
   }, [kind])
 
+  const loadGrowatt = useCallback(() => {
+    if (kind !== 'day' || growattBusy) return
+    const growatt = config.growatt
+    if (!growatt?.token?.trim()) {
+      setHaPeriod((prev) => (prev ? { ...prev, growattNote: 'Growatt: kein Token' } : prev))
+      return
+    }
+    if (isBeforeNexa(growatt, date) && !growatt.extraDeviceSn?.trim()) {
+      setHaPeriod((prev) =>
+        prev
+          ? {
+              ...prev,
+              growattNote: 'Tage vor 02.09.2026: Noah-SN unter Einstellungen eintragen.',
+            }
+          : prev,
+      )
+      return
+    }
+    setGrowattBusy(true)
+    void fetchGrowattDay(growatt, date)
+      .then((g) => {
+        setHaPeriod((prev) => {
+          if (!prev) return prev
+          if (!g.length) return { ...prev, growattNote: 'Growatt: keine Kurve für diesen Tag' }
+          return {
+            ...prev,
+            powerSeries: applyGrowattDay(prev.powerSeries, g, date),
+            growattNote: `Growatt · ${g.length} Messpunkte`,
+          }
+        })
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : 'Growatt nicht erreichbar'
+        setHaPeriod((prev) => (prev ? { ...prev, growattNote: msg } : prev))
+      })
+      .finally(() => setGrowattBusy(false))
+  }, [kind, date, config.growatt, growattBusy])
+
   return {
     live,
     period,
@@ -134,5 +236,9 @@ export function useEnergy(config: AppConfig): EnergyState {
     goNext,
     nextDisabled: isNextDisabled(kind, date),
     periodLabel: formatPeriodLabel(kind, date),
+    growattBusy,
+    loadGrowatt,
+    production,
+    loadingProduction,
   }
 }

@@ -1,8 +1,16 @@
-import { totalsFromFlows } from '@/domain/calc'
+import { kwhFromSoc, totalsFromFlows } from '@/domain/calc'
 import { savingsFromSeries } from '@/domain/tariff'
-import type { AppConfig, EntityMap } from '@/config/appConfig'
-import { normalizeEntityId } from '@/config/appConfig'
+import type { AppConfig, EntityMap, NamedBatteryPart, NamedPowerSensor } from '@/config/appConfig'
+import {
+  DEFAULT_BATTERY_PARTS,
+  DEFAULT_PV_FIELDS,
+  entityList,
+  inferredPvTempEntity,
+  inferredPvTodayEnergyIds,
+  normalizeEntityId,
+} from '@/config/appConfig'
 import type {
+  BatteryPartLive,
   EnergyTotals,
   LiveSnapshot,
   MpptLive,
@@ -12,7 +20,7 @@ import type {
   PowerPoint,
   SeriesPoint,
 } from '@/domain/types'
-import type { EnergySource } from './source'
+import type { EnergySource, PeriodFetchOpts } from './source'
 import {
   createHaClient,
   type HaClient,
@@ -27,18 +35,99 @@ import {
   isUnavailable,
   lookupState,
   parseEnergyKwh,
+  parseGridPower,
   parseMeasuredPower,
   parseSocPercent,
+  parseTempC,
   type HaState,
 } from './haParse'
-import { bucket15Min, integratePowerKwh } from './powerStats'
+import { bucket15Min, integratePowerKwh, mergeBatteryKwhIntoSeries, recorderPowerPlan } from './powerStats'
 import { energyKwhFromRow, lastCumulativeKwh } from './energyStats'
 
-const MPPT: { key: keyof EntityMap; id: string; name: string }[] = [
-  { key: 'pv1Power', id: 'pv1', name: 'PV1' },
-  { key: 'pv2Power', id: 'pv2', name: 'PV2' },
-  { key: 'pv3Power', id: 'pv3', name: 'PV3' },
-]
+const FALLBACK_PV: NamedPowerSensor[] = DEFAULT_PV_FIELDS
+const FALLBACK_BATT: NamedBatteryPart[] = DEFAULT_BATTERY_PARTS
+
+function namedPv(
+  states: Record<string, HaState>,
+  fields: NamedPowerSensor[],
+): MpptLive[] {
+  return fields.map((f) => {
+    const parsed = parseMeasuredPower(lookupState(states, f.entityId))
+    const tempId = (f.tempEntityId ?? '').trim() || inferredPvTempEntity(f.entityId)
+    const tempState = tempId ? lookupState(states, tempId) : undefined
+    const temp = tempState ? parseTempC(tempState) : { tempC: null, fault: null }
+    return {
+      id: f.id,
+      name: f.name,
+      powerW: parsed.watts,
+      fault: parsed.fault,
+      tempC: temp.fault ? null : temp.tempC,
+      tempFault: tempState ? temp.fault : null,
+      peakW: f.peakW ?? null,
+    }
+  })
+}
+
+function liveMpptTodayKwh(
+  states: Record<string, HaState>,
+  fields: NamedPowerSensor[],
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const f of fields) {
+    for (const cand of inferredPvTodayEnergyIds(f.entityId)) {
+      const kwh = kwhIfPresent(lookupState(states, cand))
+      if (kwh == null) continue
+      out[f.id] = kwh
+      break
+    }
+  }
+  return out
+}
+
+function mergeMpptTodayKwh(
+  fields: NamedPowerSensor[],
+  fromPower: MpptTotal[],
+  fromLive: Record<string, number>,
+  fromEnergy: Record<string, number>,
+): MpptTotal[] {
+  return fields.map((f) => {
+    const liveKwh = fromLive[f.id]
+    if (liveKwh != null && Number.isFinite(liveKwh)) {
+      return { id: f.id, name: f.name, kwh: liveKwh, fault: null }
+    }
+    const energyKwh = fromEnergy[f.id]
+    if (energyKwh != null && Number.isFinite(energyKwh)) {
+      return { id: f.id, name: f.name, kwh: energyKwh, fault: null }
+    }
+    return (
+      fromPower.find((m) => m.id === f.id) ?? {
+        id: f.id,
+        name: f.name,
+        kwh: 0,
+        fault: NO_STATS,
+      }
+    )
+  })
+}
+
+function namedBatteryParts(
+  states: Record<string, HaState>,
+  fields: NamedBatteryPart[],
+): BatteryPartLive[] {
+  return fields.map((f) => {
+    const soc = parseSocPercent(lookupState(states, f.socEntityId))
+    const tempState = f.tempEntityId.trim() ? lookupState(states, f.tempEntityId) : undefined
+    const temp = tempState ? parseTempC(tempState) : { tempC: null, fault: null }
+    return {
+      id: f.id,
+      name: f.name,
+      socPercent: soc.percent,
+      socFault: soc.fault,
+      tempC: temp.fault ? null : temp.tempC,
+      tempFault: tempState ? temp.fault : null,
+    }
+  })
+}
 
 const NO_STATS = 'keine Statistik'
 
@@ -155,20 +244,57 @@ function sumSeries(series: SeriesPoint[]) {
   )
 }
 
+function firstLastSocFromRows(rows: HaStatRow[]): { start: number | null; end: number | null } {
+  let start: number | null = null
+  let end: number | null = null
+  for (const row of rows) {
+    const raw =
+      typeof row.mean === 'number' && Number.isFinite(row.mean)
+        ? row.mean
+        : typeof row.state === 'number' && Number.isFinite(row.state)
+          ? row.state
+          : null
+    if (raw == null) continue
+    const pct = raw >= 0 && raw <= 1.5 ? raw * 100 : raw
+    if (pct < 0 || pct > 100) continue
+    if (start == null) start = pct
+    end = pct
+  }
+  return { start, end }
+}
+
+function firstLastSocFromPower(series: PowerPoint[] | undefined): {
+  start: number | null
+  end: number | null
+} {
+  if (!series?.length) return { start: null, end: null }
+  let start: number | null = null
+  let end: number | null = null
+  for (const p of series) {
+    if (p.socPercent == null || !Number.isFinite(p.socPercent)) continue
+    if (start == null) start = p.socPercent
+    end = p.socPercent
+  }
+  return { start, end }
+}
+
 function kwhIfPresent(state: HaState | undefined): number | null {
   if (!state || isUnavailable(state.state)) return null
   return parseEnergyKwh(state)
 }
 
-export function liveFromStates(states: Record<string, HaState>, entities: EntityMap): LiveSnapshot {
-  const mppts: MpptLive[] = MPPT.map((m) => {
-    const parsed = parseMeasuredPower(lookupState(states, entities[m.key]))
-    return { id: m.id, name: m.name, powerW: parsed.watts, fault: parsed.fault }
-  })
+export function liveFromStates(
+  states: Record<string, HaState>,
+  entities: EntityMap,
+  pvFields: NamedPowerSensor[] = FALLBACK_PV,
+  batteryParts: NamedBatteryPart[] = FALLBACK_BATT,
+): LiveSnapshot {
+  const mppts = namedPv(states, pvFields.length ? pvFields : FALLBACK_PV)
+  const parts = namedBatteryParts(states, batteryParts.length ? batteryParts : FALLBACK_BATT)
 
   const pv = parseMeasuredPower(lookupState(states, entities.solarPower))
   const batt = parseMeasuredPower(lookupState(states, entities.batteryPower))
-  const grid = parseMeasuredPower(lookupState(states, entities.gridPower))
+  const grid = parseGridPower(lookupState(states, entities.gridPower))
   const shelly = parseMeasuredPower(lookupState(states, entities.garagePower))
   const soc = parseSocPercent(lookupState(states, entities.soc))
 
@@ -197,30 +323,49 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
       chargeW,
       dischargeW,
       fault: batt.fault,
+      parts,
     },
     grid: { importW, exportW, fault: grid.fault },
   }
 }
 
-function mpptTotals(stats: HaStatistics, ids: string[], period: HaPeriod): MpptTotal[] {
-  return ids.map((id, i) => {
+function mpptTotals(stats: HaStatistics, fields: NamedPowerSensor[], period: HaPeriod): MpptTotal[] {
+  return fields.map((f) => {
+    const id = eid(f.entityId)
     const integ = integratePowerKwh(stats[id] ?? [], period)
     return {
-      id: MPPT[i]?.id ?? id,
-      name: MPPT[i]?.name ?? `PV${i + 1}`,
+      id: f.id,
+      name: f.name,
       kwh: integ.absKwh,
       fault: integ.samples === 0 ? NO_STATS : null,
     }
   })
 }
 
+function watchedEntityIds(config: AppConfig): string[] {
+  const extra = (config.pvFields ?? []).flatMap((f) => [
+    inferredPvTempEntity(f.entityId),
+    ...inferredPvTodayEnergyIds(f.entityId),
+  ])
+  return [...new Set([...entityList(config), ...extra].map(normalizeEntityId).filter(Boolean))]
+}
+
+function periodCacheKey(kind: PeriodKind, date: Date): string {
+  if (kind === 'day') return `d-${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+  if (kind === 'month') return `m-${date.getFullYear()}-${date.getMonth()}`
+  return `y-${date.getFullYear()}`
+}
+
+const EMPTY_POWER_INTEG = { chargeKwh: 0, dischargeKwh: 0, absKwh: 0, samples: 0 }
+
 export class HomeAssistantEnergySource implements EnergySource {
   private client: HaClient | null = null
   private clientError: Error | null = null
+  private inflight = new Map<string, Promise<PeriodStats>>()
 
   constructor(private readonly config: AppConfig) {
     try {
-      this.client = createHaClient(config.haUrl, config.haToken)
+      this.client = createHaClient(config.haUrl, config.haToken, watchedEntityIds(config))
     } catch (e) {
       this.clientError = e instanceof Error ? e : new Error(String(e))
     }
@@ -234,37 +379,81 @@ export class HomeAssistantEnergySource implements EnergySource {
 
   async getLive(): Promise<LiveSnapshot> {
     const states = await this.requireClient().getStates()
-    return liveFromStates(states, this.config.entities)
+    return liveFromStates(
+      states,
+      this.config.entities,
+      this.config.pvFields,
+      this.config.batteryParts,
+    )
   }
 
   subscribeLive(cb: (s: LiveSnapshot) => void): () => void {
     if (!this.client) return () => {}
     let cancelled = false
+    let trailing: ReturnType<typeof setTimeout> | undefined
     const client = this.client
     const push = () => {
       void client.getStates().then((states) => {
-        if (!cancelled) cb(liveFromStates(states, this.config.entities))
+        if (!cancelled) {
+          cb(
+            liveFromStates(
+              states,
+              this.config.entities,
+              this.config.pvFields,
+              this.config.batteryParts,
+            ),
+          )
+        }
       })
     }
-    const unsub = client.subscribe(push)
+    const onChange = () => {
+      if (trailing != null) return
+      trailing = setTimeout(() => {
+        trailing = undefined
+        push()
+      }, 400)
+    }
+    const unsub = client.subscribe(onChange)
     push()
     return () => {
       cancelled = true
+      if (trailing != null) clearTimeout(trailing)
       unsub()
     }
   }
 
-  async getPeriod(kind: PeriodKind, date: Date): Promise<PeriodStats> {
+  async getPeriod(kind: PeriodKind, date: Date, opts?: PeriodFetchOpts): Promise<PeriodStats> {
+    const includePower = opts?.includePower !== false
+    const key = `${periodCacheKey(kind, date)}|${includePower}`
+    const hit = this.inflight.get(key)
+    if (hit) return hit
+    const p = this.fetchPeriod(kind, date, includePower).finally(() => {
+      setTimeout(() => this.inflight.delete(key), 1500)
+    })
+    this.inflight.set(key, p)
+    return p
+  }
+
+  private async fetchPeriod(
+    kind: PeriodKind,
+    date: Date,
+    includePower: boolean,
+  ): Promise<PeriodStats> {
     const client = this.requireClient()
-    const { entities, tariff } = this.config
+    const { entities, tariff, pvFields, batteryParts, batteryCapacityKwh } = this.config
     const e = {
       pv: eid(entities.generationToday),
       home: eid(entities.homeToday),
       exp: eid(entities.exportToday),
       imp: eid(entities.importToday),
     }
-    const mpptIds = MPPT.map((m) => eid(entities[m.key])).filter(Boolean)
-    const energyIds = [e.pv, e.home, e.exp, e.imp].filter(Boolean)
+    const pvList = pvFields?.length ? pvFields : FALLBACK_PV
+    const battList = batteryParts?.length ? batteryParts : FALLBACK_BATT
+    const mpptEnergyIds =
+      kind === 'day'
+        ? pvList.flatMap((f) => inferredPvTodayEnergyIds(f.entityId).map(eid))
+        : []
+    const energyIds = [...new Set([e.pv, e.home, e.exp, e.imp, ...mpptEnergyIds].filter(Boolean))]
 
     let start: Date
     let end: Date
@@ -284,7 +473,11 @@ export class HomeAssistantEnergySource implements EnergySource {
 
     let energyStats: HaStatistics = {}
     try {
-      energyStats = await client.statistics(energyIds, start, end, energyPeriod)
+      energyStats = await client.statistics(energyIds, start, end, energyPeriod, [
+        'change',
+        'state',
+        'max',
+      ])
     } catch {
       energyStats = {}
     }
@@ -318,22 +511,32 @@ export class HomeAssistantEnergySource implements EnergySource {
       }
     }
 
-    const powerPeriod: HaPeriod = kind === 'year' ? 'hour' : '5minute'
+    const plan = recorderPowerPlan(kind, includePower)
     const solarId = eid(entities.solarPower)
     const battId = eid(entities.batteryPower)
     const gridId = eid(entities.gridPower)
     const garageId = eid(entities.garagePower)
-    const powerIds = [solarId, battId, gridId, garageId, ...mpptIds].filter(Boolean)
+    const socId = eid(entities.soc)
+    const extraPvIds = plan?.extras ? pvList.map((f) => eid(f.entityId)).filter(Boolean) : []
+    const battSocIds = plan?.extras ? battList.map((f) => eid(f.socEntityId)).filter(Boolean) : []
+    const powerIds = (
+      plan?.extras
+        ? [solarId, battId, gridId, garageId, socId, ...extraPvIds, ...battSocIds]
+        : [battId, socId]
+    ).filter(Boolean)
 
     let powerStats: HaStatistics = {}
-    try {
-      powerStats = await client.statistics(powerIds, start, end, powerPeriod)
-    } catch {
-      powerStats = {}
+    if (plan && powerIds.length) {
+      try {
+        powerStats = await client.statistics(powerIds, start, end, plan.period, ['mean'])
+      } catch {
+        powerStats = {}
+      }
     }
 
     let powerSeries: PowerPoint[] | undefined
-    if (kind === 'day') {
+    let growattNote: string | null = null
+    if (kind === 'day' && plan) {
       const chartEnd = isSameDay(date, new Date()) ? new Date() : end
       powerSeries = bucket15Min(
         powerStats[solarId] ?? [],
@@ -342,11 +545,46 @@ export class HomeAssistantEnergySource implements EnergySource {
         powerStats[garageId] ?? [],
         start,
         chartEnd,
+        pvList.map((f) => ({
+          id: f.id,
+          rows: powerStats[eid(f.entityId)] ?? [],
+          into: 'mppt' as const,
+        })),
+        powerStats[socId] ?? [],
+        battList.map((f) => ({
+          id: f.id,
+          rows: powerStats[eid(f.socEntityId)] ?? [],
+        })),
       )
     }
 
-    const battInteg = integratePowerKwh(powerStats[battId] ?? [], powerPeriod)
-    const mppts = mpptTotals(powerStats, mpptIds, powerPeriod)
+    if ((kind === 'month' || kind === 'year') && plan) {
+      series = mergeBatteryKwhIntoSeries(series, powerStats[battId] ?? [], plan.period, kind)
+    }
+
+    const battInteg = plan
+      ? integratePowerKwh(powerStats[battId] ?? [], plan.period)
+      : EMPTY_POWER_INTEG
+    const mpptsFromPower =
+      plan && plan.extras
+        ? mpptTotals(powerStats, pvList, plan.period)
+        : pvList.map((f) => ({ id: f.id, name: f.name, kwh: 0, fault: NO_STATS }))
+    const mpptsFromEnergy: Record<string, number> = {}
+    if (kind === 'day') {
+      for (const f of pvList) {
+        for (const cand of inferredPvTodayEnergyIds(f.entityId)) {
+          const kwh = lastCumulativeKwh(energyStats[eid(cand)] ?? [])
+          if (kwh > 0) {
+            mpptsFromEnergy[f.id] = kwh
+            break
+          }
+        }
+      }
+    }
+    let mppts = mpptsFromPower
+    if (kind === 'day' && Object.keys(mpptsFromEnergy).length) {
+      mppts = mergeMpptTodayKwh(pvList, mpptsFromPower, {}, mpptsFromEnergy)
+    }
 
     const finish = (totals: EnergyTotals): PeriodStats => ({
       kind,
@@ -355,11 +593,16 @@ export class HomeAssistantEnergySource implements EnergySource {
       totals,
       series,
       powerSeries,
+      growattNote,
     })
 
     const batteryChargeKwh = battInteg.chargeKwh
     const batteryDischargeKwh = battInteg.dischargeKwh
     const batteryEnergyFault = battInteg.samples === 0 ? NO_STATS : null
+    const socFromPower = firstLastSocFromPower(powerSeries)
+    const socFromRows = firstLastSocFromRows(powerStats[socId] ?? [])
+    const storageStartKwh = kwhFromSoc(socFromPower.start ?? socFromRows.start, batteryCapacityKwh)
+    const storageEndKwh = kwhFromSoc(socFromPower.end ?? socFromRows.end, batteryCapacityKwh)
 
     if (kind === 'day' && isSameDay(date, new Date())) {
       const states = await client.getStates()
@@ -373,6 +616,12 @@ export class HomeAssistantEnergySource implements EnergySource {
       const gridImportKwh =
         kwhIfPresent(lookupState(states, entities.importToday)) ?? summed.gridImportKwh
       const homeKwh = homeKwhFromShellyAndGrid(shellyKwh, gridImportKwh, gridExportKwh)
+      mppts = mergeMpptTodayKwh(
+        pvList,
+        mpptsFromPower,
+        liveMpptTodayKwh(states, pvList),
+        mpptsFromEnergy,
+      )
       return finish(
         totalsFromFlows(
           {
@@ -384,6 +633,9 @@ export class HomeAssistantEnergySource implements EnergySource {
             gridImportKwh,
             gridExportKwh,
             mppts,
+            outputKwh: shellyKwh,
+            storageStartKwh,
+            storageEndKwh,
           },
           tariff,
         ),
@@ -400,6 +652,8 @@ export class HomeAssistantEnergySource implements EnergySource {
         gridImportKwh: round3(summed.gridImportKwh),
         gridExportKwh: round3(summed.gridExportKwh),
         mppts,
+        storageStartKwh,
+        storageEndKwh,
       },
       tariff,
     )

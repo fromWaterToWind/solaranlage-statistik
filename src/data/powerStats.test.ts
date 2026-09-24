@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { integratePowerKwh, meanWatts, rowDurationHours } from './powerStats'
+import { integratePowerKwh, meanWatts, recorderPowerPlan, rowDurationHours } from './powerStats'
 import type { HaStatRow } from './haConn'
 
 function row(start: string, end: string, mean: number): HaStatRow {
@@ -48,5 +48,21 @@ describe('integratePowerKwh', () => {
     ]
     const k = integratePowerKwh(rows, 'hour')
     expect(k.absKwh).toBeCloseTo(2.0, 5)
+  })
+})
+
+describe('recorderPowerPlan', () => {
+  it('uses 5-minute power only for a single day', () => {
+    expect(recorderPowerPlan('day')).toEqual({ period: '5minute', extras: true })
+  })
+
+  it('uses hour power for month and year, without PV extras', () => {
+    expect(recorderPowerPlan('month')).toEqual({ period: 'hour', extras: false })
+    expect(recorderPowerPlan('year')).toEqual({ period: 'hour', extras: false })
+  })
+
+  it('skips power statistics when includePower is false', () => {
+    expect(recorderPowerPlan('month', false)).toBeNull()
+    expect(recorderPowerPlan('day', false)).toBeNull()
   })
 })
