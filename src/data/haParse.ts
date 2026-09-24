@@ -113,43 +113,24 @@ export function lookupState(states: Record<string, HaState>, id: string): HaStat
   return undefined
 }
 
-export interface DcFlows {
-  homeW: number
-  /** PV + battery into the house (not grid import). */
-  outputW: number
-  pvToBattW: number
-  pvToHomeW: number
-  gridToBattW: number
-  chargeW: number
-  dischargeW: number
-  importW: number
-  exportW: number
+/**
+ * Live house load (W): EcoTracker − Shelly.
+ * Example: Shelly −815, EcoTracker −720 → 95 W.
+ */
+export function homeFromShellyAndGrid(shellyW: number, gridW: number): number {
+  return floorSubWatt(Math.max(0, gridW - shellyW))
 }
 
-/**
- * DC-coupled hybrid: PV can charge the battery directly.
- * Verbrauch = PV + Speicher ± Netz.
- */
-export function dcFlows(pvW: number, battSignedW: number, gridSignedW: number): DcFlows {
-  const pv = pvW > 0 ? pvW : 0
-  const chargeW = battSignedW < 0 ? -battSignedW : 0
-  const dischargeW = battSignedW > 0 ? battSignedW : 0
-  const importW = gridSignedW > 0 ? gridSignedW : 0
-  const exportW = gridSignedW < 0 ? -gridSignedW : 0
-  const pvToBattW = floorSubWatt(Math.min(pv, chargeW))
-  const gridToBattW = floorSubWatt(Math.max(0, chargeW - pv))
-  const pvToHomeW = floorSubWatt(Math.max(0, pv - chargeW))
-  const homeW = floorSubWatt(Math.max(0, pv + battSignedW + gridSignedW))
-  const outputW = floorSubWatt(Math.max(0, homeW - importW))
-  return {
-    homeW,
-    outputW,
-    pvToBattW,
-    pvToHomeW,
-    gridToBattW,
-    chargeW,
-    dischargeW,
-    importW,
-    exportW,
-  }
+/** Shelly feeding the AC bus (negative reading). */
+export function inverterOutputW(shellyW: number): number {
+  return floorSubWatt(shellyW < 0 ? -shellyW : 0)
+}
+
+/** Daily kWh: Shelly daily + Netzbezug − Einspeisung. */
+export function homeKwhFromShellyAndGrid(
+  shellyKwh: number,
+  importKwh: number,
+  exportKwh: number,
+): number {
+  return Math.max(0, Math.round((shellyKwh + importKwh - exportKwh) * 1000) / 1000)
 }

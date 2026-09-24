@@ -34,7 +34,7 @@ export interface LiveSnapshot {
   pvFault: string | null
   homeW: Watts
   homeFault: string | null
-  /** Power from PV + battery into the house (DC hybrid output). */
+  /** Shelly garage AC output (negative sensor → feeding house + grid). */
   outputW: Watts
   battery: {
     socPercent: Percent

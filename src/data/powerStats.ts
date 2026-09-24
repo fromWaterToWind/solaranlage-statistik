@@ -1,5 +1,5 @@
 import type { PowerPoint, Watts } from '@/domain/types'
-import { floorSubWatt } from './haParse'
+import { homeFromShellyAndGrid, floorSubWatt } from './haParse'
 import type { HaPeriod, HaStatRow } from './haConn'
 
 function round3(n: number): number {
@@ -68,23 +68,45 @@ export function bucket15Min(
   pv: HaStatRow[],
   grid: HaStatRow[],
   batt: HaStatRow[],
+  shelly: HaStatRow[],
   rangeStart: Date,
   rangeEnd: Date,
 ): PowerPoint[] {
   const acc = new Map<
     number,
-    { nPv: number; pv: number; nGrid: number; grid: number; nBatt: number; batt: number }
+    {
+      nPv: number
+      pv: number
+      nGrid: number
+      grid: number
+      nBatt: number
+      batt: number
+      nShelly: number
+      shelly: number
+    }
   >()
 
-  const add = (row: HaStatRow, field: 'pv' | 'grid' | 'batt', watts: Watts) => {
+  const add = (row: HaStatRow, field: 'pv' | 'grid' | 'batt' | 'shelly', watts: Watts) => {
     const k = bucketStart(row)
-    const cur = acc.get(k) ?? { nPv: 0, pv: 0, nGrid: 0, grid: 0, nBatt: 0, batt: 0 }
+    const cur = acc.get(k) ?? {
+      nPv: 0,
+      pv: 0,
+      nGrid: 0,
+      grid: 0,
+      nBatt: 0,
+      batt: 0,
+      nShelly: 0,
+      shelly: 0,
+    }
     if (field === 'pv') {
       cur.pv += watts
       cur.nPv += 1
     } else if (field === 'grid') {
       cur.grid += watts
       cur.nGrid += 1
+    } else if (field === 'shelly') {
+      cur.shelly += watts
+      cur.nShelly += 1
     } else {
       cur.batt += watts
       cur.nBatt += 1
@@ -104,6 +126,10 @@ export function bucket15Min(
     const w = meanWatts(row)
     if (w !== null) add(row, 'batt', w)
   }
+  for (const row of shelly) {
+    const w = meanWatts(row)
+    if (w !== null) add(row, 'shelly', w)
+  }
 
   const out: PowerPoint[] = []
   const endMs = rangeEnd.getTime()
@@ -112,10 +138,11 @@ export function bucket15Min(
     const pvW = v?.nPv ? v.pv / v.nPv : 0
     const gridW = v?.nGrid ? v.grid / v.nGrid : 0
     const batteryW = v?.nBatt ? v.batt / v.nBatt : 0
+    const shellyW = v?.nShelly ? v.shelly / v.nShelly : 0
     out.push({
       t: new Date(t).toISOString(),
       pvW,
-      homeW: floorSubWatt(Math.max(0, pvW + batteryW + gridW)),
+      homeW: homeFromShellyAndGrid(shellyW, gridW),
       batteryW,
       gridW,
     })

@@ -7,114 +7,49 @@ function st(id: string, state: string, unit = 'W'): HaState {
   return { entity_id: id, state, attributes: { unit_of_measurement: unit } }
 }
 
+const ids = DEFAULT_ENTITIES
+
 describe('liveFromStates', () => {
-  it('uses ecotracker_power as grid and house = battery ± grid', () => {
-    const states: Record<string, HaState> = {
-      'sensor.gc_0hvrd0zr247t000v_solar_power': st(
-        'sensor.gc_0hvrd0zr247t000v_solar_power',
-        '800',
-      ),
-      'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
-        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-        '167',
-      ),
-      'sensor.ecotracker_power': st('sensor.ecotracker_power', '0.4'),
-      'sensor.gc_0hvrd0zr247t000v_soc': st('sensor.gc_0hvrd0zr247t000v_soc', '55', '%'),
-    }
-
-    const live = liveFromStates(states, { ...DEFAULT_ENTITIES, homePower: '' })
-
-    expect(live.grid.importW).toBe(0)
-    expect(live.grid.exportW).toBe(0)
-    expect(live.grid.fault).toBeNull()
-    expect(live.battery.dischargeW).toBe(167)
-    expect(live.homeW).toBe(967)
-    expect(live.outputW).toBe(967)
+  it('Verbrauch W is EcoTracker − Shelly (−815 and −720 → 95)', () => {
+    const live = liveFromStates(
+      {
+        [ids.garagePower]: st(ids.garagePower, '-815'),
+        [ids.gridPower]: st(ids.gridPower, '-720'),
+        [ids.solarPower]: st(ids.solarPower, '2000'),
+        [ids.batteryPower]: st(ids.batteryPower, '-1000'),
+      },
+      ids,
+    )
+    expect(live.homeW).toBe(95)
+    expect(live.outputW).toBe(815)
+    expect(live.grid.exportW).toBe(720)
     expect(live.homeFault).toBeNull()
+  })
+
+  it('does not use PV or battery for house watts', () => {
+    const live = liveFromStates(
+      {
+        [ids.garagePower]: st(ids.garagePower, '-815'),
+        [ids.gridPower]: st(ids.gridPower, '-720'),
+        [ids.solarPower]: st(ids.solarPower, '800'),
+        [ids.batteryPower]: st(ids.batteryPower, '167'),
+      },
+      ids,
+    )
+    expect(live.homeW).toBe(95)
     expect(live.pvW).toBe(800)
+    expect(live.battery.dischargeW).toBe(167)
   })
 
-  it('puts battery discharge on house, not on grid export', () => {
+  it('shows shelly unavailable on house', () => {
     const live = liveFromStates(
       {
-        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
-          'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-          '186',
-        ),
-        'sensor.ecotracker_power': st('sensor.ecotracker_power', '3'),
-        'sensor.gc_0hvrd0zr247t000v_solar_power': st(
-          'sensor.gc_0hvrd0zr247t000v_solar_power',
-          '0.4',
-        ),
+        [ids.garagePower]: st(ids.garagePower, 'unavailable'),
+        [ids.gridPower]: st(ids.gridPower, '-720'),
       },
-      { ...DEFAULT_ENTITIES, homePower: '' },
+      ids,
     )
-    expect(live.pvW).toBe(0)
-    expect(live.battery.dischargeW).toBe(186)
-    expect(live.grid.importW).toBe(3)
-    expect(live.grid.exportW).toBe(0)
-    expect(live.homeW).toBe(189)
-    expect(live.outputW).toBe(186)
-  })
-
-
-  it('shows ecotracker unavailable instead of 0', () => {
-    const live = liveFromStates(
-      {
-        'sensor.ecotracker_power': st('sensor.ecotracker_power', 'unavailable'),
-        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
-          'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-          '167',
-        ),
-        'sensor.gc_0hvrd0zr247t000v_solar_power': st(
-          'sensor.gc_0hvrd0zr247t000v_solar_power',
-          '0',
-        ),
-      },
-      { ...DEFAULT_ENTITIES, homePower: '' },
-    )
-    expect(live.grid.fault).toBe('unavailable')
-    expect(live.homeFault).toBeNull()
-    expect(live.homeW).toBe(167)
-  })
-
-  it('shows house from battery when grid sensor is missing', () => {
-    const live = liveFromStates(
-      {
-        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
-          'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-          '186',
-        ),
-        'sensor.gc_0hvrd0zr247t000v_solar_power': st(
-          'sensor.gc_0hvrd0zr247t000v_solar_power',
-          '0',
-        ),
-      },
-      { ...DEFAULT_ENTITIES, homePower: '' },
-    )
-    expect(live.grid.fault).toBe('fehlt')
-    expect(live.homeFault).toBeNull()
-    expect(live.homeW).toBe(186)
-  })
-
-  it('DC-coupled: PV plus charge still shows house load', () => {
-    const live = liveFromStates(
-      {
-        'sensor.gc_0hvrd0zr247t000v_solar_power': st(
-          'sensor.gc_0hvrd0zr247t000v_solar_power',
-          '2000',
-        ),
-        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
-          'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-          '-1000',
-        ),
-        'sensor.ecotracker_power': st('sensor.ecotracker_power', '-200'),
-      },
-      { ...DEFAULT_ENTITIES, homePower: '' },
-    )
-    expect(live.homeW).toBe(800)
-    expect(live.outputW).toBe(800)
-    expect(live.battery.chargeW).toBe(1000)
-    expect(live.grid.exportW).toBe(200)
+    expect(live.homeFault).toBe('unavailable')
+    expect(live.homeW).toBe(0)
   })
 })

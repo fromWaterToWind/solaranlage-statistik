@@ -1,6 +1,5 @@
 import { formatKw, formatMeasuredW, formatPercent } from '@/domain/calc'
 import type { LiveSnapshot } from '@/domain/types'
-import { dcFlows } from '@/data/haParse'
 import './PowerFlow.css'
 
 interface PowerFlowProps {
@@ -57,46 +56,39 @@ export function PowerFlow({ live }: PowerFlowProps) {
   }
 
   const { pvW, pvFault, homeW, homeFault, outputW, battery, grid } = live
-  const battSigned = battery.fault ? 0 : battery.dischargeW - battery.chargeW
-  const gridSigned = grid.fault ? 0 : grid.importW - grid.exportW
-  const flows = dcFlows(pvFault ? 0 : pvW, battSigned, gridSigned)
+  const chargeW = battery.fault ? 0 : battery.chargeW
+  const dischargeW = battery.fault ? 0 : battery.dischargeW
+  const importW = grid.fault ? 0 : grid.importW
+  const exportW = grid.fault ? 0 : grid.exportW
+  const pvToBattW =
+    pvFault || chargeW < FLOW_MIN_W ? 0 : Math.min(pvW, chargeW)
+  const gridToBattW = Math.max(0, chargeW - (pvFault ? 0 : pvW))
 
-  const maxW = Math.max(
-    pvW,
-    homeW,
-    outputW,
-    flows.pvToBattW,
-    flows.pvToHomeW,
-    flows.dischargeW,
-    flows.importW,
-    flows.exportW,
-    flows.gridToBattW,
-    1,
-  )
+  const maxW = Math.max(pvW, homeW, outputW, dischargeW, importW, exportW, pvToBattW, 1)
 
-  const isExport = flows.exportW > FLOW_MIN_W
-  const isCharge = flows.chargeW > FLOW_MIN_W
+  const isExport = exportW > FLOW_MIN_W
+  const isCharge = chargeW > FLOW_MIN_W
 
   const batterySub = battery.fault
     ? battery.fault
     : isCharge
-      ? `Laden · ${formatKw(flows.chargeW)}`
-      : flows.dischargeW > FLOW_MIN_W
-        ? `Entladen · ${formatKw(flows.dischargeW)}`
+      ? `Laden · ${formatKw(chargeW)}`
+      : dischargeW > FLOW_MIN_W
+        ? `Entladen · ${formatKw(dischargeW)}`
         : 'Bereit'
 
   const gridLabel = grid.fault
     ? grid.fault
     : isExport
-      ? formatKw(flows.exportW)
-      : flows.importW > FLOW_MIN_W
-        ? formatKw(flows.importW)
+      ? formatKw(exportW)
+      : importW > FLOW_MIN_W
+        ? formatKw(importW)
         : '—'
   const gridSub = grid.fault
     ? 'Fehler'
     : isExport
       ? 'Einspeisung'
-      : flows.importW > FLOW_MIN_W
+      : importW > FLOW_MIN_W
         ? 'Bezug'
         : 'Netz'
 
@@ -114,37 +106,31 @@ export function PowerFlow({ live }: PowerFlowProps) {
         <FlowEdge
           d="M158 78 Q 100 100, 78 128"
           color="var(--pv)"
-          watts={pvFault ? 0 : flows.pvToBattW}
-          maxW={maxW}
-        />
-        <FlowEdge
-          d="M180 86 L180 208"
-          color="var(--pv)"
-          watts={pvFault ? 0 : flows.pvToHomeW}
+          watts={pvToBattW}
           maxW={maxW}
         />
         <FlowEdge
           d="M78 176 Q 110 228, 148 242"
           color="var(--battery)"
-          watts={flows.dischargeW}
+          watts={dischargeW}
           maxW={maxW}
         />
         <FlowEdge
           d="M282 148 Q 180 132, 90 148"
           color="var(--grid-import)"
-          watts={flows.gridToBattW}
+          watts={gridToBattW}
           maxW={maxW}
         />
         <FlowEdge
           d="M282 176 Q 250 228, 212 242"
           color="var(--grid-import)"
-          watts={flows.importW}
+          watts={importW}
           maxW={maxW}
         />
         <FlowEdge
           d="M212 248 Q 250 228, 282 176"
           color="var(--grid-export)"
-          watts={flows.exportW}
+          watts={exportW}
           maxW={maxW}
         />
 
@@ -272,7 +258,7 @@ export function PowerFlow({ live }: PowerFlowProps) {
         </g>
       </svg>
       <p className="power-flow__output">
-        <span className="power-flow__output-label">Output ins Haus</span>
+        <span className="power-flow__output-label">Output (Shelly)</span>
         <span className="power-flow__output-value">{formatKw(outputW)}</span>
       </p>
     </section>

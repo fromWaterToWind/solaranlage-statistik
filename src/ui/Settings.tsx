@@ -19,9 +19,9 @@ const ENTITY_FIELDS: { key: keyof EntityMap; label: string; hint?: string }[] = 
   { key: 'generationToday', label: 'Erzeugung heute' },
   { key: 'soc', label: 'Batterie SOC' },
   { key: 'batteryPower', label: 'Batterie Leistung (+ Entladen)' },
-  { key: 'gridPower', label: 'Netz Leistung (EcoTracker)', hint: 'positiv = Bezug, negativ = Einspeisung' },
-  { key: 'homePower', label: 'Haus Leistung (optional, leer lassen)' },
-  { key: 'homeToday', label: 'Hausverbrauch heute' },
+  { key: 'garagePower', label: 'Shelly Garage Leistung (W)' },
+  { key: 'gridPower', label: 'Netz Leistung (EcoTracker)' },
+  { key: 'homeToday', label: 'Shelly Garage täglich (kWh)' },
   { key: 'exportToday', label: 'Einspeisung heute' },
   { key: 'importToday', label: 'Netzbezug heute' },
 ]
@@ -189,7 +189,11 @@ export function Settings({ config, onSave, onClose }: SettingsProps) {
                 <input
                   type="text"
                   spellCheck={false}
-                  placeholder={f.key === 'homePower' ? 'leer = PV + Speicher ± Netz' : undefined}
+                  placeholder={
+                    f.key === 'garagePower'
+                      ? 'sensor.shelly_i_garage_power'
+                      : undefined
+                  }
                   value={draft.entities[f.key]}
                   onChange={(e) =>
                     setDraft({

@@ -21,8 +21,9 @@ import {
   type HaStatistics,
 } from './haConn'
 import {
-  dcFlows,
-  floorSubWatt,
+  homeFromShellyAndGrid,
+  homeKwhFromShellyAndGrid,
+  inverterOutputW,
   isUnavailable,
   lookupState,
   parseEnergyKwh,
@@ -168,6 +169,7 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
   const pv = parseMeasuredPower(lookupState(states, entities.solarPower))
   const batt = parseMeasuredPower(lookupState(states, entities.batteryPower))
   const grid = parseMeasuredPower(lookupState(states, entities.gridPower))
+  const shelly = parseMeasuredPower(lookupState(states, entities.garagePower))
   const soc = parseSocPercent(lookupState(states, entities.soc))
 
   const chargeW = batt.fault ? 0 : batt.watts < 0 ? -batt.watts : 0
@@ -175,22 +177,11 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
   const importW = grid.fault ? 0 : grid.watts > 0 ? grid.watts : 0
   const exportW = grid.fault ? 0 : grid.watts < 0 ? -grid.watts : 0
 
-  const flows = dcFlows(
-    pv.fault ? 0 : pv.watts,
-    batt.fault ? 0 : batt.watts,
-    grid.fault ? 0 : grid.watts,
-  )
-
-  const homeEntity = entities.homePower.trim()
-  let homeW = flows.homeW
-  let homeFault: string | null = null
-  if (homeEntity) {
-    const home = parseMeasuredPower(lookupState(states, homeEntity))
-    homeW = home.watts < 0 ? 0 : home.watts
-    homeFault = home.fault
-  } else if (pv.fault && batt.fault && grid.fault) {
-    homeFault = batt.fault ?? pv.fault ?? grid.fault
-  }
+  const homeFault = shelly.fault ?? grid.fault
+  const homeW = homeFault
+    ? 0
+    : homeFromShellyAndGrid(shelly.watts, grid.watts)
+  const outputW = shelly.fault ? 0 : inverterOutputW(shelly.watts)
 
   return {
     at: new Date().toISOString(),
@@ -199,7 +190,7 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
     pvFault: pv.fault,
     homeW,
     homeFault,
-    outputW: floorSubWatt(Math.max(0, homeW - importW)),
+    outputW,
     battery: {
       socPercent: soc.percent,
       socFault: soc.fault,
@@ -299,14 +290,15 @@ export class HomeAssistantEnergySource implements EnergySource {
     }
 
     let series = seriesFromEnergyStats(e, energyStats, energyPeriod)
+    series = series.map((p) => ({
+      ...p,
+      homeKwh: homeKwhFromShellyAndGrid(p.homeKwh, p.gridImportKwh, p.gridExportKwh),
+    }))
     if (kind === 'year') {
       series = bucketByMonth(series)
     }
     const summed = sumSeries(series)
     if (kind === 'day') {
-      if (summed.homeKwh === 0) {
-        summed.homeKwh = lastCumulativeKwh(energyStats[e.home] ?? [])
-      }
       if (summed.productionKwh === 0) {
         summed.productionKwh = lastCumulativeKwh(energyStats[e.pv] ?? [])
       }
@@ -316,13 +308,22 @@ export class HomeAssistantEnergySource implements EnergySource {
       if (summed.gridExportKwh === 0) {
         summed.gridExportKwh = lastCumulativeKwh(energyStats[e.exp] ?? [])
       }
+      const shellyDay = lastCumulativeKwh(energyStats[e.home] ?? [])
+      if (summed.homeKwh === 0 && (shellyDay > 0 || summed.gridImportKwh > 0)) {
+        summed.homeKwh = homeKwhFromShellyAndGrid(
+          shellyDay,
+          summed.gridImportKwh,
+          summed.gridExportKwh,
+        )
+      }
     }
 
     const powerPeriod: HaPeriod = kind === 'year' ? 'hour' : '5minute'
     const solarId = eid(entities.solarPower)
     const battId = eid(entities.batteryPower)
     const gridId = eid(entities.gridPower)
-    const powerIds = [solarId, battId, gridId, ...mpptIds].filter(Boolean)
+    const garageId = eid(entities.garagePower)
+    const powerIds = [solarId, battId, gridId, garageId, ...mpptIds].filter(Boolean)
 
     let powerStats: HaStatistics = {}
     try {
@@ -338,6 +339,7 @@ export class HomeAssistantEnergySource implements EnergySource {
         powerStats[solarId] ?? [],
         powerStats[gridId] ?? [],
         powerStats[battId] ?? [],
+        powerStats[garageId] ?? [],
         start,
         chartEnd,
       )
@@ -363,11 +365,14 @@ export class HomeAssistantEnergySource implements EnergySource {
       const states = await client.getStates()
       const productionKwh =
         kwhIfPresent(lookupState(states, entities.generationToday)) ?? summed.productionKwh
-      const homeKwh = kwhIfPresent(lookupState(states, entities.homeToday)) ?? summed.homeKwh
+      const shellyKwh =
+        kwhIfPresent(lookupState(states, entities.homeToday)) ??
+        lastCumulativeKwh(energyStats[e.home] ?? [])
       const gridExportKwh =
         kwhIfPresent(lookupState(states, entities.exportToday)) ?? summed.gridExportKwh
       const gridImportKwh =
         kwhIfPresent(lookupState(states, entities.importToday)) ?? summed.gridImportKwh
+      const homeKwh = homeKwhFromShellyAndGrid(shellyKwh, gridImportKwh, gridExportKwh)
       return finish(
         totalsFromFlows(
           {

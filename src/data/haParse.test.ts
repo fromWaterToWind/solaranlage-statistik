@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  dcFlows,
+  homeFromShellyAndGrid,
+  homeKwhFromShellyAndGrid,
+  inverterOutputW,
   lookupState,
   parseMeasuredPower,
   toWatts,
@@ -57,22 +59,21 @@ describe('parseMeasuredPower', () => {
   })
 })
 
-describe('dcFlows', () => {
-  it('night: house is battery discharge, output equals house', () => {
-    const f = dcFlows(0, 186, 3)
-    expect(f.homeW).toBe(189)
-    expect(f.outputW).toBe(186)
-    expect(f.dischargeW).toBe(186)
-    expect(f.pvToBattW).toBe(0)
+describe('homeFromShellyAndGrid', () => {
+  it('Shelly −815 and EcoTracker −720 is 95 W house load', () => {
+    expect(homeFromShellyAndGrid(-815, -720)).toBe(95)
+    expect(inverterOutputW(-815)).toBe(815)
   })
 
-  it('DC charge: PV goes into the battery, house still visible', () => {
-    const f = dcFlows(2000, -1000, -200)
-    expect(f.pvToBattW).toBe(1000)
-    expect(f.pvToHomeW).toBe(1000)
-    expect(f.homeW).toBe(800)
-    expect(f.outputW).toBe(800)
-    expect(f.exportW).toBe(200)
+  it('grid import with idle inverter is the house load', () => {
+    expect(homeFromShellyAndGrid(0, 400)).toBe(400)
+    expect(inverterOutputW(0)).toBe(0)
+  })
+})
+
+describe('homeKwhFromShellyAndGrid', () => {
+  it('is Shelly daily + Bezug − Einspeisung', () => {
+    expect(homeKwhFromShellyAndGrid(10, 1, 3)).toBe(8)
   })
 })
 

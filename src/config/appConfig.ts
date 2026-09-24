@@ -4,18 +4,16 @@ export interface EntityMap {
   pv1Power: string
   pv2Power: string
   pv3Power: string
-  /** Inverter AC / total PV power in W — used for the live total and the day chart. */
   solarPower: string
   generationToday: string
   soc: string
   /** Positive = discharge to house, negative = charge. */
   batteryPower: string
-  /**
-   * Optional dedicated house-load power sensor. Empty = Speicher ± Netz.
-   */
-  homePower: string
+  /** Shelly garage / inverter AC power. Negative = feeding the house+grid. */
+  garagePower: string
   /** EcoTracker grid power. Positive = import, negative = export. */
   gridPower: string
+  /** Shelly garage daily kWh. Verbrauch kWh = this + Bezug − Einspeisung. */
   homeToday: string
   exportToday: string
   importToday: string
@@ -36,9 +34,9 @@ export const DEFAULT_ENTITIES: EntityMap = {
   generationToday: 'sensor.gc_0hvrd0zr247t000v_generation_today',
   soc: 'sensor.gc_0hvrd0zr247t000v_soc',
   batteryPower: 'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
-  homePower: '',
+  garagePower: 'sensor.shelly_i_garage_power',
   gridPower: 'sensor.ecotracker_power',
-  homeToday: 'sensor.hausverbrauch_strom_heute',
+  homeToday: 'sensor.shelly_i_garage_shelly_garage_daily',
   exportToday: 'sensor.ecotracker_einspeisung_heute',
   importToday: 'sensor.ecotracker_netzbezug_heute',
 }
@@ -53,7 +51,12 @@ export const DEFAULT_TARIFF: Tariff = {
 }
 
 const STORAGE_KEY = 'solar-statistik-config-v1'
-const GHOST_HOME = new Set(['sensor.hausverbrauch', 'hausverbrauch'])
+const GHOST_HOME_TODAY = new Set([
+  'sensor.hausverbrauch_strom_heute',
+  'hausverbrauch_strom_heute',
+  'sensor.hausverbrauch',
+  'hausverbrauch',
+])
 
 export function normalizeEntityId(id: string): string {
   const t = id.trim()
@@ -64,8 +67,11 @@ export function normalizeEntityId(id: string): string {
 
 function migrateEntities(entities: EntityMap): EntityMap {
   const next: EntityMap = { ...DEFAULT_ENTITIES, ...entities }
-  if (GHOST_HOME.has(normalizeEntityId(next.homePower))) {
-    next.homePower = ''
+  if (GHOST_HOME_TODAY.has(normalizeEntityId(next.homeToday))) {
+    next.homeToday = DEFAULT_ENTITIES.homeToday
+  }
+  if (!next.garagePower?.trim()) {
+    next.garagePower = DEFAULT_ENTITIES.garagePower
   }
   if (!next.gridPower.trim()) {
     next.gridPower = DEFAULT_ENTITIES.gridPower
