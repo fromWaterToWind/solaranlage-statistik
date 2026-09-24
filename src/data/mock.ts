@@ -162,6 +162,7 @@ function buildLiveAt(now: Date, socPercent: number): LiveSnapshot {
     pvFault: null,
     homeW,
     homeFault: null,
+    outputW: Math.max(0, homeW - flows.importW),
     battery: {
       socPercent: flows.socPercent,
       socFault: null,

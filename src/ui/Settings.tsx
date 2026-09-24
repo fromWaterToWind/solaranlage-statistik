@@ -189,7 +189,7 @@ export function Settings({ config, onSave, onClose }: SettingsProps) {
                 <input
                   type="text"
                   spellCheck={false}
-                  placeholder={f.key === 'homePower' ? 'leer = Speicher ± Netz' : undefined}
+                  placeholder={f.key === 'homePower' ? 'leer = PV + Speicher ± Netz' : undefined}
                   value={draft.entities[f.key]}
                   onChange={(e) =>
                     setDraft({

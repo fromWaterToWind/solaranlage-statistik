@@ -34,6 +34,8 @@ export interface LiveSnapshot {
   pvFault: string | null
   homeW: Watts
   homeFault: string | null
+  /** Power from PV + battery into the house (DC hybrid output). */
+  outputW: Watts
   battery: {
     socPercent: Percent
     socFault: string | null

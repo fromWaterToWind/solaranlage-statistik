@@ -115,7 +115,7 @@ export function bucket15Min(
     out.push({
       t: new Date(t).toISOString(),
       pvW,
-      homeW: floorSubWatt(Math.max(0, batteryW + gridW)),
+      homeW: floorSubWatt(Math.max(0, pvW + batteryW + gridW)),
       batteryW,
       gridW,
     })

@@ -28,7 +28,8 @@ describe('liveFromStates', () => {
     expect(live.grid.exportW).toBe(0)
     expect(live.grid.fault).toBeNull()
     expect(live.battery.dischargeW).toBe(167)
-    expect(live.homeW).toBe(167)
+    expect(live.homeW).toBe(967)
+    expect(live.outputW).toBe(967)
     expect(live.homeFault).toBeNull()
     expect(live.pvW).toBe(800)
   })
@@ -53,6 +54,7 @@ describe('liveFromStates', () => {
     expect(live.grid.importW).toBe(3)
     expect(live.grid.exportW).toBe(0)
     expect(live.homeW).toBe(189)
+    expect(live.outputW).toBe(186)
   })
 
 
@@ -93,5 +95,26 @@ describe('liveFromStates', () => {
     expect(live.grid.fault).toBe('fehlt')
     expect(live.homeFault).toBeNull()
     expect(live.homeW).toBe(186)
+  })
+
+  it('DC-coupled: PV plus charge still shows house load', () => {
+    const live = liveFromStates(
+      {
+        'sensor.gc_0hvrd0zr247t000v_solar_power': st(
+          'sensor.gc_0hvrd0zr247t000v_solar_power',
+          '2000',
+        ),
+        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
+          'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
+          '-1000',
+        ),
+        'sensor.ecotracker_power': st('sensor.ecotracker_power', '-200'),
+      },
+      { ...DEFAULT_ENTITIES, homePower: '' },
+    )
+    expect(live.homeW).toBe(800)
+    expect(live.outputW).toBe(800)
+    expect(live.battery.chargeW).toBe(1000)
+    expect(live.grid.exportW).toBe(200)
   })
 })

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
-  floorSubWatt,
-  homeFromBatteryAndGrid,
+  dcFlows,
   lookupState,
   parseMeasuredPower,
   toWatts,
+  floorSubWatt,
   type HaState,
 } from './haParse'
 
@@ -57,12 +57,22 @@ describe('parseMeasuredPower', () => {
   })
 })
 
-describe('homeFromBatteryAndGrid', () => {
-  it('is battery output ± grid, without PV', () => {
-    expect(homeFromBatteryAndGrid(167, 0)).toBe(167)
-    expect(homeFromBatteryAndGrid(167, 40)).toBe(207)
-    expect(homeFromBatteryAndGrid(0, -0.4)).toBe(0)
-    expect(homeFromBatteryAndGrid(-400, 400)).toBe(0)
+describe('dcFlows', () => {
+  it('night: house is battery discharge, output equals house', () => {
+    const f = dcFlows(0, 186, 3)
+    expect(f.homeW).toBe(189)
+    expect(f.outputW).toBe(186)
+    expect(f.dischargeW).toBe(186)
+    expect(f.pvToBattW).toBe(0)
+  })
+
+  it('DC charge: PV goes into the battery, house still visible', () => {
+    const f = dcFlows(2000, -1000, -200)
+    expect(f.pvToBattW).toBe(1000)
+    expect(f.pvToHomeW).toBe(1000)
+    expect(f.homeW).toBe(800)
+    expect(f.outputW).toBe(800)
+    expect(f.exportW).toBe(200)
   })
 })
 

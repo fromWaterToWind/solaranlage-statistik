@@ -113,7 +113,43 @@ export function lookupState(states: Record<string, HaState>, id: string): HaStat
   return undefined
 }
 
-/** House load = battery output (±charge) ± grid import/export. PV is not a house meter. */
-export function homeFromBatteryAndGrid(battSignedW: number, gridSignedW: number): number {
-  return floorSubWatt(Math.max(0, battSignedW + gridSignedW))
+export interface DcFlows {
+  homeW: number
+  /** PV + battery into the house (not grid import). */
+  outputW: number
+  pvToBattW: number
+  pvToHomeW: number
+  gridToBattW: number
+  chargeW: number
+  dischargeW: number
+  importW: number
+  exportW: number
+}
+
+/**
+ * DC-coupled hybrid: PV can charge the battery directly.
+ * Verbrauch = PV + Speicher ± Netz.
+ */
+export function dcFlows(pvW: number, battSignedW: number, gridSignedW: number): DcFlows {
+  const pv = pvW > 0 ? pvW : 0
+  const chargeW = battSignedW < 0 ? -battSignedW : 0
+  const dischargeW = battSignedW > 0 ? battSignedW : 0
+  const importW = gridSignedW > 0 ? gridSignedW : 0
+  const exportW = gridSignedW < 0 ? -gridSignedW : 0
+  const pvToBattW = floorSubWatt(Math.min(pv, chargeW))
+  const gridToBattW = floorSubWatt(Math.max(0, chargeW - pv))
+  const pvToHomeW = floorSubWatt(Math.max(0, pv - chargeW))
+  const homeW = floorSubWatt(Math.max(0, pv + battSignedW + gridSignedW))
+  const outputW = floorSubWatt(Math.max(0, homeW - importW))
+  return {
+    homeW,
+    outputW,
+    pvToBattW,
+    pvToHomeW,
+    gridToBattW,
+    chargeW,
+    dischargeW,
+    importW,
+    exportW,
+  }
 }

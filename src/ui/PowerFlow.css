@@ -1,5 +1,5 @@
 .power-flow {
-  padding-bottom: 8px;
+  padding-bottom: 12px;
   overflow: hidden;
 }
 
@@ -7,7 +7,28 @@
   display: block;
   width: 100%;
   height: auto;
-  max-height: 300px;
+  max-height: 340px;
+}
+
+.power-flow__output {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 4px 0;
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.power-flow__output-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.power-flow__output-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .power-flow__label {

@@ -21,7 +21,8 @@ import {
   type HaStatistics,
 } from './haConn'
 import {
-  homeFromBatteryAndGrid,
+  dcFlows,
+  floorSubWatt,
   isUnavailable,
   lookupState,
   parseEnergyKwh,
@@ -174,17 +175,21 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
   const importW = grid.fault ? 0 : grid.watts > 0 ? grid.watts : 0
   const exportW = grid.fault ? 0 : grid.watts < 0 ? -grid.watts : 0
 
+  const flows = dcFlows(
+    pv.fault ? 0 : pv.watts,
+    batt.fault ? 0 : batt.watts,
+    grid.fault ? 0 : grid.watts,
+  )
+
   const homeEntity = entities.homePower.trim()
-  let homeW = 0
+  let homeW = flows.homeW
   let homeFault: string | null = null
   if (homeEntity) {
     const home = parseMeasuredPower(lookupState(states, homeEntity))
     homeW = home.watts < 0 ? 0 : home.watts
     homeFault = home.fault
-  } else if (batt.fault) {
-    homeFault = batt.fault
-  } else {
-    homeW = homeFromBatteryAndGrid(batt.watts, grid.fault ? 0 : grid.watts)
+  } else if (pv.fault && batt.fault && grid.fault) {
+    homeFault = batt.fault ?? pv.fault ?? grid.fault
   }
 
   return {
@@ -194,6 +199,7 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
     pvFault: pv.fault,
     homeW,
     homeFault,
+    outputW: floorSubWatt(Math.max(0, homeW - importW)),
     battery: {
       socPercent: soc.percent,
       socFault: soc.fault,
