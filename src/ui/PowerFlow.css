@@ -1,69 +1,45 @@
 .power-flow {
-  padding-bottom: 12px;
-  overflow: hidden;
+  padding: 10px 10px 8px;
 }
 
 .power-flow__svg {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 340px;
 }
 
-.power-flow__output {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin: 0 4px 0;
-  padding: 8px 12px 0;
-  border-top: 1px solid var(--border);
-}
-
-.power-flow__output-label {
-  font-size: 0.82rem;
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.power-flow__output-value {
-  font-size: 1.05rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.power-flow__label {
+.power-flow__name {
   fill: var(--muted);
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
 }
 
-.power-flow__value {
+.power-flow__num {
   fill: var(--text);
   font-family: var(--font-ui);
   font-size: 13px;
   font-weight: 600;
-}
-
-.power-flow__value--hero {
-  font-family: var(--font-hero);
-  font-size: 18px;
-  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.power-flow__value--fault {
+.power-flow__num.is-fault {
   fill: var(--danger);
-  font-family: var(--font-ui);
   font-size: 11px;
-  font-weight: 600;
 }
 
-.power-flow__sub {
+.power-flow__hint {
   fill: var(--muted);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 400;
+}
+
+.power-flow__chip {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .power-flow__edge {
@@ -72,16 +48,34 @@
 
 @keyframes flow-dash {
   to {
-    stroke-dashoffset: -32;
+    stroke-dashoffset: -26;
   }
 }
 
+.power-flow__output {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 2px 2px 0;
+  padding: 6px 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.power-flow__output span:last-child {
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .power-flow--skeleton {
-  min-height: 280px;
+  min-height: 220px;
 }
 
 .power-flow__skel {
   width: 100%;
-  height: 260px;
-  border-radius: 14px;
+  height: 200px;
+  border-radius: 12px;
 }

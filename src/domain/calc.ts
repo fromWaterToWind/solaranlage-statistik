@@ -83,11 +83,24 @@ const dePercent = new Intl.NumberFormat('de-DE', {
   maximumFractionDigits: 0,
 })
 
+const deInt = new Intl.NumberFormat('de-DE', {
+  maximumFractionDigits: 0,
+})
+
 export function formatKw(watts: Watts): string {
   if (watts < 1000) {
     return `${de.format(watts)} W`
   }
   return `${de.format(watts / 1000)} kW`
+}
+
+/** Live diagram: whole watts, kW only from 1000 W, one decimal. */
+export function formatFlowW(watts: Watts): string {
+  const w = Math.round(Math.abs(watts))
+  if (w >= 1000) {
+    return `${de.format(w / 1000)} kW`
+  }
+  return `${deInt.format(w)} W`
 }
 
 export function formatKwh(kwh: Kwh): string {
@@ -104,7 +117,7 @@ export function formatPercent(p: Percent): string {
 
 export function formatMeasuredW(watts: Watts, fault: string | null): string {
   if (fault) return fault
-  return formatKw(watts)
+  return formatFlowW(watts)
 }
 
 export function formatKwhOrFault(kwh: Kwh, fault: string | null): string {

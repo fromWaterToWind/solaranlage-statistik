@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatEur,
+  formatFlowW,
   formatKw,
   formatKwh,
   formatPercent,
@@ -136,6 +137,12 @@ describe('formatters', () => {
   it('formats watts and kilowatts', () => {
     expect(formatKw(350)).toBe('350 W')
     expect(formatKw(1200)).toBe('1,2 kW')
+  })
+
+  it('formats live flow watts in one register', () => {
+    expect(formatFlowW(154.9)).toBe('155 W')
+    expect(formatFlowW(815.9)).toBe('816 W')
+    expect(formatFlowW(1300)).toBe('1,3 kW')
   })
 
   it('formats kWh, EUR and percent', () => {
