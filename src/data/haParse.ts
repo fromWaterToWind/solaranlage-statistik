@@ -29,7 +29,11 @@ export function unitOf(state: HaState | undefined): string {
 /** Convert a numeric reading to Watts using the entity unit. 0.4 kW → 400. */
 export function toWatts(value: number, unit: string): number {
   const u = unit.toLowerCase().replace(/\s/g, '')
-  if (u === 'kw') return value * 1000
+  if (u === 'kw') {
+    // House ESS never reports 50+ kW; that is W with a wrong unit (186 kW → 186 W).
+    if (Math.abs(value) >= 50) return value
+    return value * 1000
+  }
   if (u === 'mw') return value * 1_000_000
   return value
 }
@@ -67,9 +71,46 @@ export function parseSocPercent(state: HaState | undefined): { percent: number; 
 }
 
 export function stateMap(states: HaState[]): Record<string, HaState> {
+  return indexStates(states)
+}
+
+/** Flatten HA state dicts, arrays, and non-enumerable iframe proxies into a plain map. */
+export function indexStates(raw: unknown): Record<string, HaState> {
   const map: Record<string, HaState> = {}
-  for (const s of states) map[s.entity_id] = s
+  const add = (s: unknown, key?: string) => {
+    if (!s || typeof s !== 'object') return
+    const rec = s as HaState
+    if (rec.state === undefined) return
+    const id = rec.entity_id || key
+    if (!id) return
+    map[id] = rec
+  }
+  if (Array.isArray(raw)) {
+    for (const s of raw) add(s)
+    return map
+  }
+  if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) add(v, k)
+  }
   return map
+}
+
+export function lookupState(states: Record<string, HaState>, id: string): HaState | undefined {
+  const t = id.trim()
+  if (!t) return undefined
+  const full = t.includes('.') ? t : `sensor.${t}`
+  if (states[full]) return states[full]
+  const lower = full.toLowerCase()
+  const tail = (full.includes('.') ? full.slice(full.indexOf('.') + 1) : full).toLowerCase()
+  for (const [key, val] of Object.entries(states)) {
+    const k = key.toLowerCase()
+    const vid = (val.entity_id ?? '').toLowerCase()
+    if (k === lower || vid === lower) return val
+    if (tail && (k.endsWith(`.${tail}`) || k.endsWith(tail) || vid.endsWith(`.${tail}`))) {
+      return val
+    }
+  }
+  return undefined
 }
 
 /** House load = battery output (±charge) ± grid import/export. PV is not a house meter. */

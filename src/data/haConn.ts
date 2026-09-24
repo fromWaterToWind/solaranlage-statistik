@@ -1,5 +1,4 @@
-import type { HaState } from './haParse'
-import { stateMap } from './haParse'
+import { indexStates, stateMap, type HaState } from './haParse'
 
 export type HaPeriod = '5minute' | 'hour' | 'day' | 'month'
 
@@ -73,18 +72,37 @@ function toWsUrl(httpUrl: string): string {
 }
 
 class HassParentClient implements HaClient {
+  private cached: Record<string, HaState> = {}
+
   constructor(private readonly hass: HassLike) {}
 
   async getStates(): Promise<Record<string, HaState>> {
-    return this.hass.states
+    const fromHass = indexStates(this.hass.states)
+    if (Object.keys(fromHass).length > 0) {
+      this.cached = fromHass
+      return fromHass
+    }
+    if (Object.keys(this.cached).length > 0) return this.cached
+    try {
+      const list = await this.hass.callWS<HaState[]>({ type: 'get_states' })
+      this.cached = indexStates(list)
+    } catch {
+      this.cached = {}
+    }
+    return this.cached
   }
 
   subscribe(onChange: () => void): () => void {
     let unsub: (() => void) | undefined
+    void this.getStates().then(() => onChange())
     const conn = this.hass.connection
     if (conn?.subscribeEvents) {
       void conn
-        .subscribeEvents(() => onChange(), 'state_changed')
+        .subscribeEvents((event: unknown) => {
+          const ns = (event as { data?: { new_state?: HaState } })?.data?.new_state
+          if (ns?.entity_id) this.cached[ns.entity_id] = ns
+          onChange()
+        }, 'state_changed')
         .then((fn) => {
           unsub = fn
         })
@@ -92,7 +110,9 @@ class HassParentClient implements HaClient {
           /* polling fallback below */
         })
     }
-    const poll = window.setInterval(onChange, 2000)
+    const poll = window.setInterval(() => {
+      void this.getStates().then(() => onChange())
+    }, 2000)
     return () => {
       window.clearInterval(poll)
       unsub?.()

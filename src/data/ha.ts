@@ -4,7 +4,6 @@ import type { AppConfig, EntityMap } from '@/config/appConfig'
 import { normalizeEntityId } from '@/config/appConfig'
 import type {
   EnergyTotals,
-  Kwh,
   LiveSnapshot,
   MpptLive,
   MpptTotal,
@@ -24,12 +23,14 @@ import {
 import {
   homeFromBatteryAndGrid,
   isUnavailable,
+  lookupState,
   parseEnergyKwh,
   parseMeasuredPower,
   parseSocPercent,
   type HaState,
 } from './haParse'
 import { bucket15Min, integratePowerKwh } from './powerStats'
+import { energyKwhFromRow, lastCumulativeKwh } from './energyStats'
 
 const MPPT: { key: keyof EntityMap; id: string; name: string }[] = [
   { key: 'pv1Power', id: 'pv1', name: 'PV1' },
@@ -105,23 +106,6 @@ function statStart(row: HaStatRow): Date {
   return new Date(row.start)
 }
 
-/** Daily-reset energy sensors (`_heute`): ignore the midnight drop. */
-function energyKwhFromRow(row: HaStatRow, bucket: HaPeriod): Kwh {
-  if (bucket === 'hour') {
-    const change = row.change
-    if (typeof change === 'number' && Number.isFinite(change)) {
-      return change < -0.02 ? 0 : Math.max(0, change)
-    }
-  }
-  const max = row.max
-  if (typeof max === 'number' && Number.isFinite(max) && max >= 0) return max
-  const state = row.state
-  if (typeof state === 'number' && Number.isFinite(state) && state >= 0) return state
-  const change = row.change
-  if (typeof change === 'number' && Number.isFinite(change) && change > 0) return change
-  return 0
-}
-
 function seriesFromEnergyStats(
   keys: { pv: string; home: string; exp: string; imp: string },
   stats: HaStatistics,
@@ -169,18 +153,6 @@ function sumSeries(series: SeriesPoint[]) {
   )
 }
 
-function lookup(states: Record<string, HaState>, id: string): HaState | undefined {
-  const full = eid(id)
-  if (!full) return undefined
-  if (states[full]) return states[full]
-  const tail = full.includes('.') ? full.slice(full.indexOf('.') + 1) : full
-  if (!tail) return undefined
-  for (const [key, val] of Object.entries(states)) {
-    if (key.endsWith(`.${tail}`)) return val
-  }
-  return undefined
-}
-
 function kwhIfPresent(state: HaState | undefined): number | null {
   if (!state || isUnavailable(state.state)) return null
   return parseEnergyKwh(state)
@@ -188,14 +160,14 @@ function kwhIfPresent(state: HaState | undefined): number | null {
 
 export function liveFromStates(states: Record<string, HaState>, entities: EntityMap): LiveSnapshot {
   const mppts: MpptLive[] = MPPT.map((m) => {
-    const parsed = parseMeasuredPower(lookup(states, entities[m.key]))
+    const parsed = parseMeasuredPower(lookupState(states, entities[m.key]))
     return { id: m.id, name: m.name, powerW: parsed.watts, fault: parsed.fault }
   })
 
-  const pv = parseMeasuredPower(lookup(states, entities.solarPower))
-  const batt = parseMeasuredPower(lookup(states, entities.batteryPower))
-  const grid = parseMeasuredPower(lookup(states, entities.gridPower))
-  const soc = parseSocPercent(lookup(states, entities.soc))
+  const pv = parseMeasuredPower(lookupState(states, entities.solarPower))
+  const batt = parseMeasuredPower(lookupState(states, entities.batteryPower))
+  const grid = parseMeasuredPower(lookupState(states, entities.gridPower))
+  const soc = parseSocPercent(lookupState(states, entities.soc))
 
   const chargeW = batt.fault ? 0 : batt.watts < 0 ? -batt.watts : 0
   const dischargeW = batt.fault ? 0 : batt.watts > 0 ? batt.watts : 0
@@ -206,13 +178,13 @@ export function liveFromStates(states: Record<string, HaState>, entities: Entity
   let homeW = 0
   let homeFault: string | null = null
   if (homeEntity) {
-    const home = parseMeasuredPower(lookup(states, homeEntity))
+    const home = parseMeasuredPower(lookupState(states, homeEntity))
     homeW = home.watts < 0 ? 0 : home.watts
     homeFault = home.fault
-  } else if (batt.fault || grid.fault) {
-    homeFault = batt.fault ?? grid.fault
+  } else if (batt.fault) {
+    homeFault = batt.fault
   } else {
-    homeW = homeFromBatteryAndGrid(batt.watts, grid.watts)
+    homeW = homeFromBatteryAndGrid(batt.watts, grid.fault ? 0 : grid.watts)
   }
 
   return {
@@ -325,6 +297,20 @@ export class HomeAssistantEnergySource implements EnergySource {
       series = bucketByMonth(series)
     }
     const summed = sumSeries(series)
+    if (kind === 'day') {
+      if (summed.homeKwh === 0) {
+        summed.homeKwh = lastCumulativeKwh(energyStats[e.home] ?? [])
+      }
+      if (summed.productionKwh === 0) {
+        summed.productionKwh = lastCumulativeKwh(energyStats[e.pv] ?? [])
+      }
+      if (summed.gridImportKwh === 0) {
+        summed.gridImportKwh = lastCumulativeKwh(energyStats[e.imp] ?? [])
+      }
+      if (summed.gridExportKwh === 0) {
+        summed.gridExportKwh = lastCumulativeKwh(energyStats[e.exp] ?? [])
+      }
+    }
 
     const powerPeriod: HaPeriod = kind === 'year' ? 'hour' : '5minute'
     const solarId = eid(entities.solarPower)
@@ -370,12 +356,12 @@ export class HomeAssistantEnergySource implements EnergySource {
     if (kind === 'day' && isSameDay(date, new Date())) {
       const states = await client.getStates()
       const productionKwh =
-        kwhIfPresent(lookup(states, entities.generationToday)) ?? summed.productionKwh
-      const homeKwh = kwhIfPresent(lookup(states, entities.homeToday)) ?? summed.homeKwh
+        kwhIfPresent(lookupState(states, entities.generationToday)) ?? summed.productionKwh
+      const homeKwh = kwhIfPresent(lookupState(states, entities.homeToday)) ?? summed.homeKwh
       const gridExportKwh =
-        kwhIfPresent(lookup(states, entities.exportToday)) ?? summed.gridExportKwh
+        kwhIfPresent(lookupState(states, entities.exportToday)) ?? summed.gridExportKwh
       const gridImportKwh =
-        kwhIfPresent(lookup(states, entities.importToday)) ?? summed.gridImportKwh
+        kwhIfPresent(lookupState(states, entities.importToday)) ?? summed.gridImportKwh
       return finish(
         totalsFromFlows(
           {

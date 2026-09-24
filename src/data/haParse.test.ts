@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   floorSubWatt,
   homeFromBatteryAndGrid,
+  lookupState,
   parseMeasuredPower,
   toWatts,
   type HaState,
@@ -21,9 +22,10 @@ describe('toWatts', () => {
     expect(toWatts(167, 'w')).toBe(167)
   })
 
-  it('converts 0.4 kW to 400 W', () => {
+  it('converts 0.4 kW to 400 W but not 186 kW-labelled Watts', () => {
     expect(toWatts(0.4, 'kW')).toBeCloseTo(400)
-    expect(toWatts(0.4, 'kW')).toBeCloseTo(400)
+    expect(toWatts(5, 'kW')).toBeCloseTo(5000)
+    expect(toWatts(186, 'kW')).toBe(186)
   })
 })
 
@@ -51,6 +53,7 @@ describe('parseMeasuredPower', () => {
     expect(parseMeasuredPower(st('0.4', 'kW'))).toEqual({ watts: 400, fault: null })
     expect(parseMeasuredPower(st('0.0004', 'kW'))).toEqual({ watts: 0, fault: null })
     expect(parseMeasuredPower(st('167', 'W'))).toEqual({ watts: 167, fault: null })
+    expect(parseMeasuredPower(st('186', 'kW'))).toEqual({ watts: 186, fault: null })
   })
 })
 
@@ -60,5 +63,15 @@ describe('homeFromBatteryAndGrid', () => {
     expect(homeFromBatteryAndGrid(167, 40)).toBe(207)
     expect(homeFromBatteryAndGrid(0, -0.4)).toBe(0)
     expect(homeFromBatteryAndGrid(-400, 400)).toBe(0)
+  })
+})
+
+describe('lookupState', () => {
+  it('finds sensors by entity_id on the value when dict keys are unusable', () => {
+    const states = {
+      '0': st('12', 'kWh'),
+    }
+    states['0'].entity_id = 'sensor.hausverbrauch_strom_heute'
+    expect(lookupState(states, 'hausverbrauch_strom_heute')?.state).toBe('12')
   })
 })

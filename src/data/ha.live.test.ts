@@ -72,6 +72,26 @@ describe('liveFromStates', () => {
       { ...DEFAULT_ENTITIES, homePower: '' },
     )
     expect(live.grid.fault).toBe('unavailable')
-    expect(live.homeFault).toBe('unavailable')
+    expect(live.homeFault).toBeNull()
+    expect(live.homeW).toBe(167)
+  })
+
+  it('shows house from battery when grid sensor is missing', () => {
+    const live = liveFromStates(
+      {
+        'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert': st(
+          'sensor.nexa_0hvrd0zr247t000v_nexa_batterie_leistung_kombiniert',
+          '186',
+        ),
+        'sensor.gc_0hvrd0zr247t000v_solar_power': st(
+          'sensor.gc_0hvrd0zr247t000v_solar_power',
+          '0',
+        ),
+      },
+      { ...DEFAULT_ENTITIES, homePower: '' },
+    )
+    expect(live.grid.fault).toBe('fehlt')
+    expect(live.homeFault).toBeNull()
+    expect(live.homeW).toBe(186)
   })
 })
