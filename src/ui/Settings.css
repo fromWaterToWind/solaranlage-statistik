@@ -197,8 +197,75 @@
   grid-row: 1;
 }
 
+.settings__pv-geo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 6px;
+}
+
+.settings__pv-geo label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.settings__pv-geo-when {
+  grid-column: 1 / -1;
+}
+
+.settings__pv-geo input,
+.settings__pv-geo select {
+  width: 100%;
+  min-height: var(--hit);
+  padding: 0 8px;
+  font-size: 0.9rem;
+}
+
 .settings__remove {
   width: var(--hit);
   height: var(--hit);
   font-size: 1.3rem;
+}
+
+.settings__meter-choice {
+  border: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.settings__meter-choice legend {
+  margin-bottom: 6px;
+}
+
+.settings__meter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--hit);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.settings__meter-option input {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.settings__apply {
+  margin-top: 8px;
+}
+
+.settings.plant-page {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  overflow: visible;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }

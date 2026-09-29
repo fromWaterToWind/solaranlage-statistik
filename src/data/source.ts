@@ -1,3 +1,4 @@
+import { CompositeEnergySource } from './compositeSource'
 import { HomeAssistantEnergySource } from './ha'
 import { canUseParentHass } from './haConn'
 import { MockEnergySource } from './mock'
@@ -17,11 +18,8 @@ export interface EnergySource {
 }
 
 export function isHaConfigured(config: AppConfig): boolean {
-  return (
-    canUseParentHass() ||
-    Boolean(config.haToken.trim()) ||
-    !import.meta.env.DEV
-  )
+  if (canUseParentHass()) return true
+  return Boolean(config.haUrl.trim() && config.haToken.trim())
 }
 
 export function createEnergySource(config: AppConfig = loadConfig()): EnergySource {
@@ -30,5 +28,7 @@ export function createEnergySource(config: AppConfig = loadConfig()): EnergySour
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('demo') === '1'
   if (demo) return new MockEnergySource()
-  return new HomeAssistantEnergySource(config)
+  if (config.growatt.token.trim()) return new CompositeEnergySource(config)
+  if (isHaConfigured(config)) return new HomeAssistantEnergySource(config)
+  return new CompositeEnergySource(config)
 }

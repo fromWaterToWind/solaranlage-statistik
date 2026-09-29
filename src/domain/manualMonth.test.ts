@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { applyManualDays, emptyManualDay } from './manualDay'
 import {
   deriveBlankFields,
   emptyManualMonth,
@@ -251,6 +252,50 @@ describe('mergeManualPeriod', () => {
     expect(aug?.pvKwh).toBe(202.5)
     expect(aug?.homeKwh).toBe(215.9)
     expect(merged.source).toBe('manual')
+  })
+
+  it('rolls patched daily Nachträge into the year bars', () => {
+    const stats: PeriodStats = {
+      kind: 'year',
+      start: new Date(2026, 0, 1).toISOString(),
+      end: new Date(2026, 11, 31, 23, 59).toISOString(),
+      totals: emptyTotals(),
+      series: [
+        {
+          t: '2026-09-11T00:00:00',
+          pvKwh: 6,
+          homeKwh: 5,
+          batteryChargeKwh: 0,
+          batteryDischargeKwh: 0,
+          gridImportKwh: 2,
+          gridExportKwh: 0.5,
+          outputKwh: 3.1,
+        },
+      ],
+    }
+    const withDays = applyManualDays(
+      stats,
+      [{ ...emptyManualDay('2026-09-02'), houseInflowKwh: 4.32 }],
+      tariff,
+    )
+    const merged = mergeManualPeriod(
+      withDays,
+      [
+        {
+          ...emptyManualMonth(2026, 8),
+          productionKwh: 202.5,
+          houseInflowKwh: 154.2,
+          totalUseKwh: 215.9,
+        },
+      ],
+      tariff,
+      new Date(2026, 0, 1),
+    )
+    const aug = merged.series.find((p) => new Date(p.t).getMonth() === 7)
+    const sep = merged.series.find((p) => new Date(p.t).getMonth() === 8)
+    expect(aug?.pvKwh).toBe(202.5)
+    expect(aug?.outputKwh).toBe(154.2)
+    expect(sep?.outputKwh).toBeCloseTo(7.42, 5)
   })
 })
 

@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppConfig, EntityMap, NamedBatteryPart, NamedPowerSensor } from '@/config/appConfig'
-import { newBatteryPart, newNamedSensor } from '@/config/appConfig'
+import type { AppConfig, EntityMap } from '@/config/appConfig'
 import { canUseParentHass } from '@/data/haConn'
+import {
+  fetchHaEntityIds,
+  HA_ENTITY_DATALIST_ID,
+  isHaReachableForPicker,
+} from '@/data/haEntityPicker'
 import { pingGrowatt } from '@/data/growatt'
 import { GrowattSync } from '@/ui/GrowattSync'
 import { formatDeInput, parseDeNumber } from '@/domain/manualMonth'
 import type { ManualMonth } from '@/domain/manualMonth'
+import type { ManualDay } from '@/domain/manualDay'
 import {
   formatCtInput,
   formatDeDate,
@@ -15,6 +20,14 @@ import {
 } from '@/domain/tariff'
 import type { TariffPeriod } from '@/domain/types'
 import { ManualArchive } from '@/ui/ManualArchive'
+import { ManualDays } from '@/ui/ManualDays'
+import {
+  GRID_METER_ECOTRACKER_FIELDS,
+  GRID_METER_SHELLY_FIELDS,
+  inferGridMeterKind,
+  type GridMeterKind,
+} from '@/domain/gridMeter'
+import { EntityIdInput, syncLegacyPv } from '@/ui/PlantModelEditors'
 import './Settings.css'
 
 interface SettingsProps {
@@ -24,6 +37,8 @@ interface SettingsProps {
   onClose: () => void
   manualMonths: ManualMonth[]
   onManualChange: (rows: ManualMonth[]) => void
+  manualDays: ManualDay[]
+  onManualDaysChange: (rows: ManualDay[]) => void
 }
 
 const ENTITY_FIELDS: { key: keyof EntityMap; label: string }[] = [
@@ -31,9 +46,9 @@ const ENTITY_FIELDS: { key: keyof EntityMap; label: string }[] = [
   { key: 'generationToday', label: 'Erzeugung heute' },
   { key: 'soc', label: 'Batterie SOC' },
   { key: 'batteryPower', label: 'Batterie Leistung gesamt (+ Entladen)' },
-  { key: 'garagePower', label: 'Shelly Garage Leistung (W)' },
+  { key: 'garagePower', label: 'Shelly Garage Leistung (W) · WR AC' },
   { key: 'gridPower', label: 'Netz Leistung (EcoTracker)' },
-  { key: 'homeToday', label: 'Shelly Garage täglich (kWh)' },
+  { key: 'homeToday', label: 'Shelly Garage täglich (kWh) · WR AC' },
   { key: 'exportToday', label: 'Einspeisung heute' },
   { key: 'importToday', label: 'Netzbezug heute' },
 ]
@@ -189,214 +204,14 @@ function todayIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function NamedFieldsEditor({
-  title,
-  hint,
-  fields,
-  addLabel,
-  onChange,
-}: {
-  title: string
-  hint: string
-  fields: NamedPowerSensor[]
-  addLabel: string
-  onChange: (next: NamedPowerSensor[]) => void
-}) {
-  return (
-    <section className="card settings__block">
-      <p className="section-label">{title}</p>
-      <p className="settings__hint">{hint}</p>
-      {fields.map((field) => (
-        <div key={field.id} className="settings__named settings__named--pv">
-          <label className="settings__full">
-            Name
-            <input
-              value={field.name}
-              onChange={(e) =>
-                onChange(fields.map((f) => (f.id === field.id ? { ...f, name: e.target.value } : f)))
-              }
-            />
-          </label>
-          <label className="settings__full">
-            Leistung
-            <input
-              spellCheck={false}
-              placeholder="sensor.…"
-              value={field.entityId}
-              onChange={(e) =>
-                onChange(
-                  fields.map((f) => (f.id === field.id ? { ...f, entityId: e.target.value } : f)),
-                )
-              }
-            />
-          </label>
-          <label className="settings__full">
-            Temperatur
-            <input
-              spellCheck={false}
-              placeholder="sensor.…_temp"
-              value={field.tempEntityId ?? ''}
-              onChange={(e) =>
-                onChange(
-                  fields.map((f) => (f.id === field.id ? { ...f, tempEntityId: e.target.value } : f)),
-                )
-              }
-            />
-          </label>
-          <label className="settings__full">
-            Max. Watt
-            <input
-              inputMode="numeric"
-              placeholder="z. B. 430"
-              value={field.peakW ? String(field.peakW) : ''}
-              onChange={(e) => {
-                const n = parseDeNumber(e.target.value)
-                onChange(
-                  fields.map((f) =>
-                    f.id === field.id ? { ...f, peakW: n && n > 0 ? n : undefined } : f,
-                  ),
-                )
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            className="settings__remove"
-            aria-label={`${field.name} entfernen`}
-            onClick={() => onChange(fields.filter((f) => f.id !== field.id))}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="settings__add"
-        onClick={() => onChange([...fields, newNamedSensor(`${addLabel} ${fields.length + 1}`)])}
-      >
-        {addLabel} hinzufügen
-      </button>
-    </section>
-  )
-}
-
-function BatteryPartsEditor({
-  fields,
-  capacityKwh,
-  onChange,
-  onCapacityChange,
-}: {
-  fields: NamedBatteryPart[]
-  capacityKwh: number | null
-  onChange: (next: NamedBatteryPart[]) => void
-  onCapacityChange: (next: number | null) => void
-}) {
-  const [capText, setCapText] = useState(() => formatDeInput(capacityKwh))
-  const [capFocused, setCapFocused] = useState(false)
-  useEffect(() => {
-    if (!capFocused) setCapText(formatDeInput(capacityKwh))
-  }, [capacityKwh, capFocused])
-
-  return (
-    <section className="card settings__block">
-      <p className="section-label">Batterie-Teile</p>
-      <p className="settings__hint">
-        Nutzbare Kapazität aller Packs in kWh — damit SOC in kWh umgerechnet werden kann. SOC und
-        Temperatur je Modul.
-      </p>
-      <label className="settings__full">
-        Speicherkapazität (kWh)
-        <input
-          inputMode="decimal"
-          autoComplete="off"
-          placeholder="z. B. 6"
-          value={capText}
-          onChange={(e) => {
-            setCapText(e.target.value)
-            const n = parseDeNumber(e.target.value)
-            onCapacityChange(n != null && n > 0 ? n : null)
-          }}
-          onFocus={() => setCapFocused(true)}
-          onBlur={() => {
-            setCapFocused(false)
-            setCapText(formatDeInput(capacityKwh))
-          }}
-        />
-      </label>
-      {fields.map((field) => (
-        <div key={field.id} className="settings__named settings__named--pv">
-          <label className="settings__full">
-            Name
-            <input
-              value={field.name}
-              onChange={(e) =>
-                onChange(fields.map((f) => (f.id === field.id ? { ...f, name: e.target.value } : f)))
-              }
-            />
-          </label>
-          <label className="settings__full">
-            SOC
-            <input
-              spellCheck={false}
-              placeholder="sensor.…_battery1_soc"
-              value={field.socEntityId}
-              onChange={(e) =>
-                onChange(
-                  fields.map((f) => (f.id === field.id ? { ...f, socEntityId: e.target.value } : f)),
-                )
-              }
-            />
-          </label>
-          <label className="settings__full">
-            Temperatur
-            <input
-              spellCheck={false}
-              placeholder="sensor.…_battery1_temp"
-              value={field.tempEntityId}
-              onChange={(e) =>
-                onChange(
-                  fields.map((f) => (f.id === field.id ? { ...f, tempEntityId: e.target.value } : f)),
-                )
-              }
-            />
-          </label>
-          <button
-            type="button"
-            className="settings__remove"
-            aria-label={`${field.name} entfernen`}
-            onClick={() => onChange(fields.filter((f) => f.id !== field.id))}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="settings__add"
-        onClick={() => onChange([...fields, newBatteryPart(`Batterie ${fields.length + 1}`)])}
-      >
-        Batterie-Teil hinzufügen
-      </button>
-    </section>
-  )
-}
-
-function syncLegacyPv(entities: EntityMap, pvFields: NamedPowerSensor[]): EntityMap {
-  const next = { ...entities }
-  for (const f of pvFields) {
-    if (f.id === 'pv1') next.pv1Power = f.entityId
-    if (f.id === 'pv2') next.pv2Power = f.entityId
-    if (f.id === 'pv3') next.pv3Power = f.entityId
-  }
-  return next
-}
-
 export function Settings({
   config,
   onSave,
   onApply,
   manualMonths,
   onManualChange,
+  manualDays,
+  onManualDaysChange,
 }: SettingsProps) {
   const [draft, setDraft] = useState<AppConfig>(config)
   const draftRef = useRef(draft)
@@ -406,16 +221,73 @@ export function Settings({
   const [openWindows, setOpenWindows] = useState<Record<string, boolean>>({})
   const [growattMsg, setGrowattMsg] = useState<string | null>(null)
   const [growattBusy, setGrowattBusy] = useState(false)
+  const [meterKind, setMeterKind] = useState<GridMeterKind>(() => inferGridMeterKind(config.entities))
+  const [entityPickerIds, setEntityPickerIds] = useState<string[] | null>(null)
   const insideHa = canUseParentHass()
+  const pickerReady = Boolean(entityPickerIds?.length)
   const periods = draft.tariff.periods ?? []
 
-  const save = () => {
+  useEffect(() => {
+    if (!isHaReachableForPicker(config.haUrl, config.haToken)) return
+    let cancelled = false
+    void fetchHaEntityIds(config.haUrl, config.haToken).then((ids) => {
+      if (!cancelled && ids.length > 0) setEntityPickerIds(ids)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [config.haUrl, config.haToken])
+
+  const syncedDraft = (): AppConfig => {
     const current = draftRef.current
-    onSave({
+    return {
       ...current,
       entities: syncLegacyPv(current.entities, current.pvFields ?? []),
+    }
+  }
+
+  const save = () => {
+    onSave(syncedDraft())
+  }
+
+  const applySetup = () => {
+    const next = syncedDraft()
+    setDraft(next)
+    onApply?.(next)
+    onSave(next)
+  }
+
+  const pingGrowattConnection = () => {
+    setGrowattBusy(true)
+    setGrowattMsg(null)
+    const current = draftRef.current
+    void pingGrowatt(current.growatt ?? { token: '', deviceSn: '', plantId: '' }).then((r) => {
+      setGrowattMsg(r.message)
+      setGrowattBusy(false)
+      if (r.ok) {
+        const extra = current.growatt?.extraDeviceSn?.trim() || r.extraSns?.[0] || ''
+        const next = {
+          ...current,
+          growatt: {
+            ...(current.growatt ?? { token: '', deviceSn: '', plantId: '' }),
+            deviceType: 'noah',
+            extraDeviceSn: extra,
+            nexaFrom: current.growatt?.nexaFrom || '2026-09-02',
+          },
+          entities: syncLegacyPv(current.entities, current.pvFields ?? []),
+        }
+        setDraft(next)
+        onApply?.(next)
+      }
     })
   }
+
+  const meterFields =
+    meterKind === 'ecotracker'
+      ? GRID_METER_ECOTRACKER_FIELDS
+      : meterKind === 'shelly'
+        ? GRID_METER_SHELLY_FIELDS
+        : []
 
   const setPeriods = (next: TariffPeriod[]) => {
     setDraft((prev) => ({ ...prev, tariff: { periods: next } }))
@@ -441,6 +313,129 @@ export function Settings({
           ×
         </button>
       </header>
+
+      {pickerReady ? (
+        <datalist id={HA_ENTITY_DATALIST_ID}>
+          {entityPickerIds!.map((eid) => (
+            <option key={eid} value={eid} />
+          ))}
+        </datalist>
+      ) : null}
+
+      <section className="card settings__block">
+        <p className="section-label">Anlage einrichten</p>
+        <p className="settings__hint">
+          Topologie A: Speicher und Wechselrichter in einem Gerät (Growatt Nexa, Marstek o. ä.) — plus ein
+          Zähler am Netzanschluss.
+        </p>
+        {insideHa ? (
+          <p className="settings__hint">Sidebar ist verbunden.</p>
+        ) : (
+          <p className="settings__hint">
+            Growatt Open API für Live und Verlauf; Zähler-Entities aus Home Assistant.
+          </p>
+        )}
+
+        <p className="section-label">Growatt</p>
+        <p className="settings__hint">
+          Token aus dem Shine-Portal (Open API v4). Seriennummer der Nexa auf dem Typenschild.
+        </p>
+        <label className="settings__full">
+          Token
+          <input
+            type="password"
+            autoComplete="off"
+            value={draft.growatt?.token ?? ''}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                growatt: {
+                  ...(draft.growatt ?? { token: '', deviceSn: '0HVRD0ZR247T000V', plantId: '' }),
+                  token: e.target.value,
+                },
+              })
+            }
+          />
+        </label>
+        <label className="settings__full">
+          Nexa SN
+          <input
+            spellCheck={false}
+            placeholder="0HVRD0ZR247T000V"
+            value={draft.growatt?.deviceSn ?? ''}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                growatt: {
+                  ...(draft.growatt ?? { token: '', deviceSn: '', plantId: '' }),
+                  deviceSn: e.target.value,
+                },
+              })
+            }
+          />
+        </label>
+        <button
+          type="button"
+          className="settings__add"
+          disabled={growattBusy}
+          onClick={pingGrowattConnection}
+        >
+          {growattBusy ? 'Prüfe …' : 'Verbindung prüfen'}
+        </button>
+        {growattMsg ? <p className="settings__hint">{growattMsg}</p> : null}
+
+        <fieldset className="settings__meter-choice">
+          <legend className="section-label">Netz-Zähler</legend>
+          <p className="settings__hint">Ein Zähler reicht für Bezug und Einspeisung — EcoTracker oder Shelly.</p>
+          <label className="settings__meter-option">
+            <input
+              type="radio"
+              name="grid-meter"
+              checked={meterKind === 'ecotracker'}
+              onChange={() => setMeterKind('ecotracker')}
+            />
+            EcoTracker (HA Entity)
+          </label>
+          <label className="settings__meter-option">
+            <input
+              type="radio"
+              name="grid-meter"
+              checked={meterKind === 'shelly'}
+              onChange={() => setMeterKind('shelly')}
+            />
+            Shelly (HA Entity)
+          </label>
+          <label className="settings__meter-option">
+            <input
+              type="radio"
+              name="grid-meter"
+              checked={meterKind === 'none'}
+              onChange={() => setMeterKind('none')}
+            />
+            Keiner
+          </label>
+        </fieldset>
+
+        {meterFields.map((f) => (
+          <label key={f.key} className="settings__full">
+            {f.label}
+            <EntityIdInput
+              pickerReady={pickerReady}
+              value={draft.entities[f.key]}
+              onChange={(value) =>
+                setDraft({
+                  ...draft,
+                  entities: { ...draft.entities, [f.key]: value },
+                })
+              }
+            />
+          </label>
+        ))}
+
+        <button type="button" className="settings__save settings__apply" onClick={applySetup}>
+          Übernehmen
+        </button>
+      </section>
 
       <section className="card settings__block">
         <p className="section-label">Stromtarif · ct/kWh</p>
@@ -594,29 +589,29 @@ export function Settings({
           className="settings__add"
           onClick={() => setShowArchive((v) => !v)}
         >
-          {showArchive ? 'Nachträge ausblenden' : 'Nachträge (alte Monatswerte)'}
+          {showArchive ? 'Nachträge ausblenden' : 'Nachträge (Monate und Tage)'}
         </button>
         {showArchive ? (
-          <ManualArchive embedded rows={manualMonths} onChange={onManualChange} />
+          <>
+            <p className="settings__hint">Monate ohne Tracker, oder um einen Tracker-Monat zu ersetzen.</p>
+            <ManualArchive embedded rows={manualMonths} onChange={onManualChange} />
+            <p className="section-label">Tage</p>
+            <ManualDays rows={manualDays} onChange={onManualDaysChange} />
+          </>
         ) : (
-          <p className="settings__hint">Manuelle Monatswerte, wenn kein Tracker da ist — oder um Tracker-Monate zu ersetzen.</p>
+          <p className="settings__hint">
+            Monatswerte ohne Tracker — und einzelne Tage, etwa Eigenverbrauch bevor der Shelly da war.
+          </p>
         )}
       </section>
 
-      <NamedFieldsEditor
-        title="PV-Felder"
-        hint="Name, Leistung, Temperatur (pv1_temp) und die maximale Wattzahl der Module. Live zeigt dann Prozent vom Maximum."
-        fields={draft.pvFields ?? []}
-        addLabel="PV-Feld"
-        onChange={(pvFields) => setDraft({ ...draft, pvFields })}
-      />
-
-      <BatteryPartsEditor
-        fields={draft.batteryParts ?? []}
-        capacityKwh={draft.batteryCapacityKwh ?? null}
-        onChange={(batteryParts) => setDraft({ ...draft, batteryParts })}
-        onCapacityChange={(batteryCapacityKwh) => setDraft({ ...draft, batteryCapacityKwh })}
-      />
+      <section className="card settings__block">
+        <p className="section-label">Anlage · Modell</p>
+        <p className="settings__hint">
+          PV-Geometrie, Verlust-Schätzung, Standort für die Prognose und Batterie-Kapazität liegen im
+          Tab <strong>Anlage</strong> in der unteren Navigation.
+        </p>
+      </section>
 
       <section className="card settings__block">
         <p className="section-label">Home Assistant</p>
@@ -650,46 +645,11 @@ export function Settings({
       </section>
 
       <section className="card settings__block">
-        <p className="section-label">Growatt API</p>
+        <p className="section-label">Growatt Verlauf</p>
         <p className="settings__hint">
-          Token aus dem Shine-Portal (Open API v4). Verlauf kommt über
-          `/v4/new-api/queryHistoricalData`. Im Verlauf den Tag per Knopf holen. Höchstens eine
-          Anfrage pro Minute.
+          Historie über Open API (`queryHistoricalData`). Token und Nexa-SN stehen oben unter Anlage
+          einrichten. Höchstens eine Anfrage pro Minute.
         </p>
-        <label className="settings__full">
-          Token
-          <input
-            type="password"
-            autoComplete="off"
-            value={draft.growatt?.token ?? ''}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                growatt: {
-                  ...(draft.growatt ?? { token: '', deviceSn: '0HVRD0ZR247T000V', plantId: '' }),
-                  token: e.target.value,
-                },
-              })
-            }
-          />
-        </label>
-        <label className="settings__full">
-          Nexa SN
-          <input
-            spellCheck={false}
-            placeholder="0HVRD0ZR247T000V"
-            value={draft.growatt?.deviceSn ?? ''}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                growatt: {
-                  ...(draft.growatt ?? { token: '', deviceSn: '', plantId: '' }),
-                  deviceSn: e.target.value,
-                },
-              })
-            }
-          />
-        </label>
         <label className="settings__full">
           Noah SN (zweites Gerät)
           <input
@@ -711,41 +671,6 @@ export function Settings({
           Ab 02.09.2026 kommt der Verlauf von der Nexa. Davor holt der Knopf den alten Noah — Live
           bleibt die Nexa.
         </p>
-        <button
-          type="button"
-          className="settings__add"
-          disabled={growattBusy}
-          onClick={() => {
-            setGrowattBusy(true)
-            setGrowattMsg(null)
-            const current = draftRef.current
-            void pingGrowatt(current.growatt ?? { token: '', deviceSn: '', plantId: '' }).then(
-              (r) => {
-                setGrowattMsg(r.message)
-                setGrowattBusy(false)
-                if (r.ok) {
-                  const extra =
-                    current.growatt?.extraDeviceSn?.trim() || r.extraSns?.[0] || ''
-                  const next = {
-                    ...current,
-                    growatt: {
-                      ...(current.growatt ?? { token: '', deviceSn: '', plantId: '' }),
-                      deviceType: 'noah',
-                      extraDeviceSn: extra,
-                      nexaFrom: current.growatt?.nexaFrom || '2026-09-02',
-                    },
-                    entities: syncLegacyPv(current.entities, current.pvFields ?? []),
-                  }
-                  setDraft(next)
-                  onApply?.(next)
-                }
-              },
-            )
-          }}
-        >
-          {growattBusy ? 'Prüfe …' : 'Verbindung prüfen'}
-        </button>
-        {growattMsg ? <p className="settings__hint">{growattMsg}</p> : null}
         <GrowattSync config={draft.growatt ?? { token: '', deviceSn: '', plantId: '' }} />
       </section>
 
@@ -761,14 +686,13 @@ export function Settings({
           ? ENTITY_FIELDS.map((f) => (
               <label key={f.key} className="settings__full">
                 {f.label}
-                <input
-                  type="text"
-                  spellCheck={false}
+                <EntityIdInput
+                  pickerReady={pickerReady}
                   value={draft.entities[f.key]}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     setDraft({
                       ...draft,
-                      entities: { ...draft.entities, [f.key]: e.target.value },
+                      entities: { ...draft.entities, [f.key]: value },
                     })
                   }
                 />

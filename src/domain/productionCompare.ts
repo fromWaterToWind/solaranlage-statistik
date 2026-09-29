@@ -17,11 +17,14 @@ function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+function localDayKey(iso: string): string {
+  return dayKey(new Date(iso))
+}
+
 function pvByDay(series: { t: string; pvKwh: number }[]): Map<string, number> {
   const map = new Map<string, number>()
   for (const p of series) {
-    const d = new Date(p.t)
-    const key = dayKey(new Date(d.getFullYear(), d.getMonth(), d.getDate()))
+    const key = localDayKey(p.t)
     map.set(key, (map.get(key) ?? 0) + p.pvKwh)
   }
   return map
@@ -49,6 +52,20 @@ function monthToDate(map: Map<string, number>, year: number, month: number, thro
   return sum
 }
 
+function monthToDateFromStats(
+  stats: PeriodStats,
+  year: number,
+  monthIndex: number,
+  throughDay: number,
+): number {
+  const map = pvByDay(stats.series ?? [])
+  if (map.size > 0) return monthToDate(map, year, monthIndex, throughDay)
+  const total = Math.max(0, stats.totals.productionKwh)
+  if (total <= 0.05) return 0
+  const dim = new Date(year, monthIndex + 1, 0).getDate()
+  return total * (Math.min(throughDay, dim) / dim)
+}
+
 export function deltaPercent(current: number, previous: number): number | null {
   if (previous <= 0.05) return null
   return ((current - previous) / previous) * 100
@@ -72,10 +89,15 @@ export function buildProductionCompare(
   const prevWeekKwh = sumRolling(map, prevWeekEnd, 7)
 
   const throughDay = today.getDate()
-  const monthBeforeToday = monthToDate(map, today.getFullYear(), today.getMonth(), throughDay - 1)
+  const monthBeforeToday = monthToDateFromStats(
+    thisMonth,
+    today.getFullYear(),
+    today.getMonth(),
+    throughDay - 1,
+  )
   const monthKwh = monthBeforeToday + todayKwh
   const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-  const prevMonthKwh = monthToDate(map, prev.getFullYear(), prev.getMonth(), throughDay)
+  const prevMonthKwh = monthToDateFromStats(lastMonth, prev.getFullYear(), prev.getMonth(), throughDay)
 
   return {
     today: {

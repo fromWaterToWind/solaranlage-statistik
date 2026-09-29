@@ -1,0 +1,95 @@
+.friends {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.friends__copy {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.friends__copy + .friends__copy {
+  margin-top: 8px;
+}
+
+.friends__rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.friends__rank li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.friends__rank li.is-me {
+  color: var(--pv);
+}
+
+.friends__cta {
+  width: 100%;
+  min-height: 44px;
+  margin: 0 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.friends__code {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #121512;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 10px;
+  resize: vertical;
+}
+
+.friends__err {
+  margin: 0 0 8px;
+  color: var(--danger);
+  font-size: 0.82rem;
+}
+
+.friends__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.friends__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.friends__row span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.friends__remove {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-height: 40px;
+  padding: 0 8px;
+}

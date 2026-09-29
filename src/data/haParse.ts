@@ -139,11 +139,13 @@ export function inverterOutputW(shellyW: number): number {
   return floorSubWatt(shellyW < 0 ? -shellyW : 0)
 }
 
-/** Daily kWh: Shelly daily + Netzbezug − Einspeisung. */
+import { homeKwhFromWrAc } from '@/domain/calc'
+
+/** Daily kWh: WR AC (Shelly) + Netzbezug − Einspeisung, never below Netzbezug. */
 export function homeKwhFromShellyAndGrid(
   shellyKwh: number,
   importKwh: number,
   exportKwh: number,
 ): number {
-  return Math.max(0, Math.round((shellyKwh + importKwh - exportKwh) * 1000) / 1000)
+  return homeKwhFromWrAc(shellyKwh, importKwh, exportKwh)
 }

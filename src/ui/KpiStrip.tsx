@@ -1,10 +1,11 @@
 import { formatEur, formatKwh, formatPercent } from '@/domain/calc'
-import type { EnergyTotals } from '@/domain/types'
+import type { EnergyTotals, PeriodKind } from '@/domain/types'
 import './KpiStrip.css'
 
 interface KpiStripProps {
   totals: EnergyTotals | null
   loading: boolean
+  kind?: PeriodKind
 }
 
 function Tile({
@@ -28,7 +29,7 @@ function Tile({
   )
 }
 
-export function KpiStrip({ totals, loading }: KpiStripProps) {
+export function KpiStrip({ totals, loading, kind }: KpiStripProps) {
   if (loading || !totals) {
     return (
       <section className="kpi-strip" aria-hidden>
@@ -41,8 +42,12 @@ export function KpiStrip({ totals, loading }: KpiStripProps) {
   }
 
   const lossFault = Boolean(totals.lossFault)
+  const outputMissing = totals.productionKwh > 5 && totals.homeKwh < 0.5 && totals.outputKwh < 0.5
+  const hideLoss = kind === 'day'
+  const hasStorageDelta = totals.storageStartKwh != null && totals.storageEndKwh != null
+  const lossLabel = hasStorageDelta ? 'Speicherverlust' : 'DC minus AC'
   const lossShare =
-    !lossFault && totals.productionKwh > 0.05
+    !lossFault && !outputMissing && totals.productionKwh > 0.05
       ? ` · ${formatPercent((totals.lossKwh / totals.productionKwh) * 100)}`
       : ''
 
@@ -51,11 +56,19 @@ export function KpiStrip({ totals, loading }: KpiStripProps) {
       <Tile label="Ersparnis" value={formatEur(totals.savedEur)} accent />
       <Tile label="Autarkiegrad" value={formatPercent(totals.autarkyPercent)} />
       <Tile label="Eigenverbrauchsquote" value={formatPercent(totals.selfConsumptionPercent)} />
-      <Tile
-        label="Speicherverlust"
-        value={lossFault ? totals.lossFault ?? '—' : `${formatKwh(totals.lossKwh)}${lossShare}`}
-        fault={lossFault}
-      />
+      {hideLoss ? null : (
+        <Tile
+          label={lossLabel}
+          value={
+            outputMissing
+              ? 'WR AC fehlt'
+              : lossFault
+                ? totals.lossFault ?? '—'
+                : `${formatKwh(totals.lossKwh)}${lossShare}`
+          }
+          fault={lossFault || outputMissing}
+        />
+      )}
     </section>
   )
 }

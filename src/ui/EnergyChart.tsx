@@ -1,4 +1,4 @@
-import { useId, useState, type CSSProperties } from 'react'
+import { useId, useState, type CSSProperties, type ReactElement } from 'react'
 import {
   Area,
   Bar,
@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { formatKw, formatPercent, formatWattAxis, selfKwhFromPoint } from '@/domain/calc'
+import { formatKw, formatPercent, formatWattAxis, eigenverbrauchKwh, reconcileHomeAndSelf } from '@/domain/calc'
 import type { PeriodKind, PeriodSource, PowerPoint, SeriesPoint } from '@/domain/types'
 import './EnergyChart.css'
 
@@ -22,6 +22,12 @@ export interface ChartSeriesDef {
   unit: 'W' | '%' | 'kWh'
   /** Same id → one column (positive up, negative down). */
   stackId?: string
+  /** Diagonal hatch fill (Eigenverbrauch inside Verbrauch). */
+  hatch?: boolean
+  /** Draw this series inside another bar (same category, not stacked beside it). */
+  overlayOn?: string
+  /** Dashed stroke (e.g. forecast). */
+  dashed?: boolean
 }
 
 interface EnergyChartProps {
@@ -82,6 +88,42 @@ function formatSignedW(watts: number): string {
 
 function ChartTooltip({ active, payload, label, unit, defs, hidden }: TipProps) {
   if (!active || !payload?.length) return null
+  const row = payload[0] as TipEntry & { payload?: Record<string, number> }
+  const homeDef = defs?.find((d) => d.key === 'homeKwh')
+  const selfDef = defs?.find((d) => d.key === 'selfKwh' && d.overlayOn === 'homeKwh')
+  if (unit === 'kWh' && homeDef && selfDef && row.payload) {
+    const home = Number(row.payload.homeKwh ?? 0)
+    const self = Number(row.payload.selfKwh ?? 0)
+    const lines: { name: string; color: string; text: string; key: string }[] = []
+    if (!hidden?.homeKwh && home >= 0.05) {
+      lines.push({
+        key: 'homeKwh',
+        name: homeDef.name,
+        color: homeDef.color,
+        text: `${deKwh.format(home)} kWh`,
+      })
+    }
+    if (!hidden?.selfKwh && self >= 0.05) {
+      lines.push({
+        key: 'selfKwh',
+        name: selfDef.name,
+        color: selfDef.color,
+        text: `${deKwh.format(self)} kWh`,
+      })
+    }
+    if (!lines.length) return null
+    return (
+      <div className="energy-chart__tip">
+        <div className="energy-chart__tip-label">{label}</div>
+        {lines.map((line) => (
+          <div key={line.key} className="energy-chart__tip-row">
+            <span style={{ color: line.color }}>{line.name}</span>
+            <span>{line.text}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
   const collapsed: TipEntry[] = []
   let battSeen = false
   for (const entry of payload) {
@@ -198,6 +240,7 @@ function powerRows(series: PowerPoint[]) {
       hour: d.getHours(),
       minute: d.getMinutes(),
       pvW: p.pvW,
+      pvForecastW: p.pvForecastW ?? null,
       homeW: p.homeW,
       battW: p.batteryW,
       chargeW: p.batteryW < 0 ? p.batteryW : 0,
@@ -229,14 +272,23 @@ function energyRows(kind: PeriodKind, series: SeriesPoint[]) {
     } else {
       label = new Intl.DateTimeFormat('de-DE', { month: 'short' }).format(d)
     }
+    const rawSelf = eigenverbrauchKwh({
+      homeKwh: p.homeKwh,
+      importKwh: p.gridImportKwh,
+      exportKwh: p.gridExportKwh,
+      outputKwh: p.outputKwh,
+      selfKwh: p.selfKwh,
+    })
+    const { homeKwh, selfKwh } = reconcileHomeAndSelf(p.homeKwh, rawSelf)
     return {
       key: p.t,
       label,
       pvKwh: p.pvKwh,
-      homeKwh: p.homeKwh,
-      selfKwh: selfKwhFromPoint(p.homeKwh, p.gridImportKwh, p.selfKwh),
+      homeKwh,
+      selfKwh,
       importKwh: p.gridImportKwh,
       exportKwh: p.gridExportKwh > 0 ? -p.gridExportKwh : 0,
+      outputKwh: p.outputKwh ?? 0,
       dischargeKwh: p.batteryDischargeKwh,
       chargeKwh: p.batteryChargeKwh > 0 ? -p.batteryChargeKwh : 0,
     }
@@ -261,7 +313,7 @@ function Legend({
         <button
           key={d.key}
           type="button"
-          className={`energy-chart__chip${hidden[d.key] ? ' is-off' : ''}`}
+          className={`energy-chart__chip${hidden[d.key] ? ' is-off' : ''}${d.hatch ? ' is-hatch' : ''}`}
           style={{ '--chip': d.color } as CSSProperties}
           aria-pressed={!hidden[d.key]}
           onClick={() => onToggle(d.key)}
@@ -429,7 +481,8 @@ function DayChart({
                   dataKey={d.key}
                   name={d.name}
                   stroke={d.color}
-                  strokeWidth={1.6}
+                  strokeWidth={d.dashed ? 1.4 : 1.6}
+                  strokeDasharray={d.dashed ? '6 4' : undefined}
                   dot={false}
                   isAnimationActive={false}
                 />
@@ -452,6 +505,137 @@ function DayChart({
         </ResponsiveContainer>
       </div>
     </section>
+  )
+}
+
+function roundedRectPath(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  tl: number,
+  tr: number,
+  br: number,
+  bl: number,
+): string {
+  const maxR = Math.min(Math.abs(w) / 2, Math.abs(h) / 2)
+  const rtl = Math.min(tl, maxR)
+  const rtr = Math.min(tr, maxR)
+  const rbr = Math.min(br, maxR)
+  const rbl = Math.min(bl, maxR)
+  return [
+    `M${x + rtl},${y}`,
+    `H${x + w - rtr}`,
+    rtr ? `a${rtr},${rtr} 0 0 1 ${rtr},${rtr}` : '',
+    `V${y + h - rbr}`,
+    rbr ? `a${rbr},${rbr} 0 0 1 ${-rbr},${rbr}` : '',
+    `H${x + rbl}`,
+    rbl ? `a${rbl},${rbl} 0 0 1 ${-rbl},${-rbl}` : '',
+    `V${y + rtl}`,
+    rtl ? `a${rtl},${rtl} 0 0 1 ${rtl},${-rtl}` : '',
+    'Z',
+  ].join(' ')
+}
+
+/** Square on the zero axis, round on the far cap — also for negative (export) bars. */
+function AxisCapBar(props: {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  fill?: string
+  value?: number
+}) {
+  const x = Number(props.x ?? 0)
+  const y = Number(props.y ?? 0)
+  const width = Number(props.width ?? 0)
+  const height = Number(props.height ?? 0)
+  if (!width || !height) return null
+  const cap = 2
+  const negative = height < 0 || Number(props.value ?? 0) < 0
+  if (!negative) {
+    return <path d={roundedRectPath(x, y, width, Math.abs(height), cap, cap, 0, 0)} fill={props.fill} />
+  }
+  if (height < 0) {
+    return (
+      <path d={roundedRectPath(x, y + height, width, -height, 0, 0, cap, cap)} fill={props.fill} />
+    )
+  }
+  return <path d={roundedRectPath(x, y, width, height, 0, 0, cap, cap)} fill={props.fill} />
+}
+
+function hatchLines(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  stroke: string,
+): ReactElement[] {
+  const gap = Math.max(3.5, Math.min(5, width * 0.5))
+  const out: ReactElement[] = []
+  const span = width + height
+  for (let i = -height; i < span; i += gap) {
+    out.push(
+      <line
+        key={i}
+        x1={x + i}
+        y1={y + height}
+        x2={x + i + height}
+        y2={y}
+        stroke={stroke}
+        strokeWidth="1.5"
+        strokeLinecap="square"
+      />,
+    )
+  }
+  return out
+}
+
+function HomeSplitBar(props: {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  payload?: { homeKwh?: number; selfKwh?: number }
+  homeColor: string
+  selfColor: string
+  showSelf: boolean
+  clipPrefix: string
+}) {
+  const x = Number(props.x ?? 0)
+  const y = Number(props.y ?? 0)
+  const width = Number(props.width ?? 0)
+  const height = Number(props.height ?? 0)
+  if (!width || !height) return null
+  const home = Math.max(0, Number(props.payload?.homeKwh ?? 0))
+  const self = Math.min(home, Math.max(0, Number(props.payload?.selfKwh ?? 0)))
+  const cap = 2
+  const path = roundedRectPath(x, y, width, height, cap, cap, 0, 0)
+  const clipId = `${props.clipPrefix}-${Math.round(x)}-${Math.round(y)}`
+  const selfHeight = home > 0 ? (self / home) * height : 0
+  const selfY = y + height - selfHeight
+  return (
+    <g>
+      <defs>
+        <clipPath id={clipId}>
+          <path d={path} />
+        </clipPath>
+      </defs>
+      <path d={path} fill={props.homeColor} />
+      {props.showSelf && selfHeight > 0 ? (
+        <g clipPath={`url(#${clipId})`}>
+          <rect
+            x={x}
+            y={selfY}
+            width={width}
+            height={selfHeight}
+            fill={props.selfColor}
+            fillOpacity={0.35}
+          />
+          {hatchLines(x, selfY, width, selfHeight, props.selfColor)}
+        </g>
+      ) : null}
+    </g>
   )
 }
 
@@ -487,13 +671,16 @@ function EnergyBarChart({
           })
           .map((r) => r.label)
       : undefined
-  const barSize = kind === 'month' ? 7 : 16
-  const stacked = shown.some((d) => d.stackId)
+  const barSize = kind === 'month' ? 10 : 16
+  const bars = shown.filter((d) => !d.overlayOn)
+  const stacked = bars.some((d) => d.stackId)
+  const hatchId = `hatch-${useId().replace(/:/g, '')}`
+  const hatchDefs = shown.filter((d) => d.hatch)
 
   const toggle = (key: string) => {
     setHidden((cur) => {
       const next = { ...cur, [key]: !cur[key] }
-      const remaining = available.filter((d) => !next[d.key])
+      const remaining = available.filter((d) => !next[d.key] && !d.overlayOn)
       return remaining.length === 0 ? cur : next
     })
   }
@@ -526,22 +713,72 @@ function EnergyBarChart({
               width={36}
             />
             <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
+            {hatchDefs.length ? (
+              <defs>
+                {hatchDefs.map((d) => (
+                  <pattern
+                    key={d.key}
+                    id={`${hatchId}-${d.key}`}
+                    width="8"
+                    height="8"
+                    patternUnits="userSpaceOnUse"
+                    patternTransform="rotate(35)"
+                  >
+                    <line x1="0" y1="0" x2="0" y2="8" stroke={d.color} strokeWidth="1.4" />
+                  </pattern>
+                ))}
+              </defs>
+            ) : null}
             <Tooltip
-              content={<ChartTooltip unit="kWh" defs={available} />}
+              content={<ChartTooltip unit="kWh" defs={available} hidden={hidden} />}
               cursor={{ fill: 'rgba(42,48,43,0.35)' }}
             />
-            {shown.map((d) => (
-              <Bar
-                key={d.key}
-                dataKey={d.key}
-                name={d.name}
-                fill={d.color}
-                stackId={d.stackId}
-                radius={d.key === 'exportKwh' ? [0, 0, 2, 2] : [2, 2, 0, 0]}
-                maxBarSize={barSize}
-                isAnimationActive={false}
-              />
-            ))}
+            {bars.map((d) => {
+              const overlay = shown.find((o) => o.overlayOn === d.key)
+              return (
+                <Bar
+                  key={d.key}
+                  dataKey={d.key}
+                  name={d.name}
+                  fill={d.color}
+                  stackId={d.stackId}
+                  shape={
+                    overlay
+                      ? (props: {
+                          x?: number
+                          y?: number
+                          width?: number
+                          height?: number
+                          payload?: { homeKwh?: number; selfKwh?: number }
+                        }) => (
+                          <HomeSplitBar
+                            {...props}
+                            homeColor={d.color}
+                            selfColor={overlay.color}
+                            showSelf
+                            clipPrefix={hatchId}
+                          />
+                        )
+                      : d.stackId === 'home'
+                        ? undefined
+                        : (props: {
+                            x?: number
+                            y?: number
+                            width?: number
+                            height?: number
+                            value?: number
+                          }) => (
+                            <AxisCapBar
+                              {...props}
+                              fill={d.hatch ? `url(#${hatchId}-${d.key})` : d.color}
+                            />
+                          )
+                  }
+                  maxBarSize={barSize}
+                  isAnimationActive={false}
+                />
+              )
+            })}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

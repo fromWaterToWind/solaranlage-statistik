@@ -10,7 +10,55 @@ import {
   parseDeviceList,
   parseGrowattChart,
   parseGrowattHistory,
+  integrateGrowattDayPoints,
+  productionKwhFrom15MinSeries,
+  productionKwhFromGrowattPoints,
+  resolveGrowattApiBase,
 } from './growatt'
+
+const NEXA_HISTORY_FIXTURE = {
+  deviceSn: '0HVRD0ZR247T000V',
+  time: 1788901824000,
+  pac: -49.0,
+  eacToday: 0.0,
+  eacMonth: 36.1,
+  eacYear: 36.5,
+  eacTotal: 36.5,
+  ppv: 0.0,
+  totalBatteryPackChargingPower: -49,
+  totalBatteryPackSoc: 17,
+  battery1SerialNum: '0HVRD0ZR247T000V',
+  battery1Soc: 10,
+  battery1Temp: 32.0,
+  battery2SerialNum: '0PVP00ED26UT01XH',
+  battery2Soc: 25,
+  battery2Temp: 23.0,
+  battery3SerialNum: '0PVP00ED26UT03E9',
+  battery3Soc: 16,
+  battery3Temp: 26.0,
+  battery4SerialNum: '',
+  ctFlag: 1,
+  totalHouseholdLoad: 18.0,
+  householdLoadApartFromGroplug: 18.0,
+  ctSelfPower: -31.0,
+  chargeSocLimit: 100,
+  dischargeSocLimit: 15,
+  pv1Voltage: 7.05,
+  pv1Current: 0.0,
+  pv1Temp: 28.7,
+  pv2Voltage: 7.07,
+  pv2Current: 0.08,
+  pv2Temp: 28.7,
+  pv3Voltage: 7.09,
+  pv3Current: 0.0,
+  pv3Temp: 28.7,
+  pv4Voltage: 7.12,
+  pv4Current: 0.0,
+  pv4Temp: 28.7,
+  onGridPower: 49.9,
+  onGridVoltage: 230.8,
+  timeStr: '2026-09-09 05:10:24',
+}
 import type { PowerPoint } from '@/domain/types'
 
 describe('parseGrowattHistory', () => {
@@ -52,6 +100,27 @@ describe('parseGrowattHistory', () => {
     expect(points[0].mpptW.pv2).toBe(100)
   })
 
+  it('maps full Nexa history fixture (CT, temps, eac counters)', () => {
+    const [p] = parseGrowattHistory({
+      code: 0,
+      data: { datas: [NEXA_HISTORY_FIXTURE] },
+    })
+    expect(p.pvW).toBe(0)
+    expect(p.outputW).toBe(49)
+    expect(p.homeW).toBe(18)
+    expect(p.batteryW).toBe(49)
+    expect(p.gridW).toBe(-31)
+    expect(p.ctFlag).toBe(1)
+    expect(p.socPercent).toBe(17)
+    expect(p.tempByPack).toEqual({ b1: 32, b2: 23, b3: 26 })
+    expect(p.chargeSocLimit).toBe(100)
+    expect(p.dischargeSocLimit).toBe(15)
+    expect(p.eacToday).toBe(0)
+    expect(p.eacMonth).toBe(36.1)
+    expect(p.mpptTempC?.pv1).toBe(28.7)
+    expect(p.fault).toBeNull()
+  })
+
   it('maps Nexa history fields without treating pac as PV', () => {
     const points = parseGrowattHistory({
       code: 0,
@@ -87,6 +156,7 @@ describe('parseGrowattHistory', () => {
     })
     expect(points).toHaveLength(1)
     expect(points[0].pvW).toBe(0)
+    expect(points[0].outputW).toBe(120)
     expect(points[0].homeW).toBe(83)
     expect(points[0].batteryW).toBe(120)
     expect(points[0].gridW).toBe(-37)
@@ -311,6 +381,61 @@ describe('otherGrowattSns', () => {
         '0HVRD0ZR247T000V',
       ),
     ).toEqual(['OLDNOAH123'])
+  })
+})
+
+describe('resolveGrowattApiBase', () => {
+  it('uses vite proxy in dev', () => {
+    expect(resolveGrowattApiBase({ dev: true, native: false })).toBe('/growatt')
+  })
+
+  it('uses openapi on native production', () => {
+    expect(resolveGrowattApiBase({ dev: false, native: true })).toBe('https://openapi.growatt.com')
+  })
+
+  it('uses HA panel path on web production', () => {
+    expect(resolveGrowattApiBase({ dev: false, native: false })).toBe('/api/solar_statistik/growatt')
+  })
+})
+
+describe('production kWh from power', () => {
+  it('integrates 400 W over four 15-min slots to 0.4 kWh', () => {
+    const t0 = new Date(2026, 5, 15, 10, 0).toISOString()
+    const series = [
+      { t: t0, pvW: 400, homeW: 0, batteryW: 0, gridW: 0 },
+      { t: new Date(2026, 5, 15, 10, 15).toISOString(), pvW: 400, homeW: 0, batteryW: 0, gridW: 0 },
+      { t: new Date(2026, 5, 15, 10, 30).toISOString(), pvW: 400, homeW: 0, batteryW: 0, gridW: 0 },
+      { t: new Date(2026, 5, 15, 10, 45).toISOString(), pvW: 400, homeW: 0, batteryW: 0, gridW: 0 },
+    ]
+    expect(productionKwhFrom15MinSeries(series)).toBeCloseTo(0.4, 5)
+  })
+
+  it('integrates Growatt samples by real Δt (3 min at 400 W → 0.02 kWh)', () => {
+    const points = parseGrowattHistory({
+      error_code: 0,
+      data: {
+        datas: [
+          { time: '2026-06-15 10:00:00', ppv: 400 },
+          { time: '2026-06-15 10:03:00', ppv: 400 },
+        ],
+      },
+    })
+    const integrals = integrateGrowattDayPoints(points, new Date(2026, 5, 16))
+    expect(integrals.productionKwh).toBeCloseTo(0.02, 5)
+    expect(productionKwhFromGrowattPoints(points, new Date(2026, 5, 16))).toBeCloseTo(0.02, 5)
+  })
+
+  it('integrates 400 W for 60 min between two history points to 0.4 kWh', () => {
+    const points = parseGrowattHistory({
+      error_code: 0,
+      data: {
+        datas: [
+          { time: '2026-06-15 10:00:00', ppv: 400 },
+          { time: '2026-06-15 11:00:00', ppv: 400 },
+        ],
+      },
+    })
+    expect(productionKwhFromGrowattPoints(points, new Date(2026, 5, 16))).toBeCloseTo(0.4, 5)
   })
 })
 

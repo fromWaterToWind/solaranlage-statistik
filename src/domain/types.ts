@@ -100,7 +100,7 @@ export interface EnergyTotals {
   autarkyPercent: Percent
   selfConsumptionPercent: Percent
   savedEur: Euros
-  /** AC after the inverter (Zufluss Hausnetz). */
+  /** Inverter AC output into the house grid. */
   outputKwh: Kwh
   storageStartKwh: Kwh | null
   storageEndKwh: Kwh | null
@@ -117,6 +117,8 @@ export interface SeriesPoint {
   batteryDischargeKwh: Kwh
   gridImportKwh: Kwh
   gridExportKwh: Kwh
+  /** Inverter AC into the house grid (Shelly daily or Nexa pac). */
+  outputKwh?: Kwh
   /** Optional explicit Eigenverbrauch; else home − import. */
   selfKwh?: Kwh
 }
@@ -128,6 +130,8 @@ export interface PowerPoint {
   homeW: Watts
   batteryW: Watts
   gridW: Watts
+  /** Modelled PV from weather; never replaces pvW. */
+  pvForecastW?: Watts
   mpptW?: Record<string, Watts>
   battPartW?: Record<string, Watts>
   socPercent?: number | null

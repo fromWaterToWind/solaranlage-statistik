@@ -88,6 +88,11 @@ describe('homeKwhFromShellyAndGrid', () => {
   it('is Shelly daily + Bezug − Einspeisung', () => {
     expect(homeKwhFromShellyAndGrid(10, 1, 3)).toBe(8)
   })
+
+  it('does not wipe the day when Shelly is missing and we exported', () => {
+    expect(homeKwhFromShellyAndGrid(0, 4.2, 12)).toBe(4.2)
+    expect(homeKwhFromShellyAndGrid(0, 0, 9)).toBe(0)
+  })
 })
 
 describe('lookupState', () => {

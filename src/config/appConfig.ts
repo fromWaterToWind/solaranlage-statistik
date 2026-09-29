@@ -1,5 +1,10 @@
 import type { Tariff, TariffPeriod } from '@/domain/types'
 import { eurosToCt, resolvePeriods, windowBuyCt } from '@/domain/tariff'
+import { isNativePlatform, setGrowattToken } from '@/data/secureToken'
+
+export type PvShading = 'none' | 'light' | 'medium' | 'strong'
+
+const PV_SHADING_VALUES: PvShading[] = ['none', 'light', 'medium', 'strong']
 
 export interface NamedPowerSensor {
   id: string
@@ -8,6 +13,15 @@ export interface NamedPowerSensor {
   tempEntityId?: string
   /** Rated peak watts for this field; used for % of capacity. */
   peakW?: number
+  /** 0=N, 90=E, 180=S, 270=W — typical DE south = 180. */
+  azimuthDeg: number | null
+  /** 0=flat, 90=wall. */
+  tiltDeg: number | null
+  /** Module STC kW peak; may coexist with peakW. */
+  kWp: number | null
+  shading: PvShading | null
+  /** Free text, e.g. morning shade in winter. */
+  shadingWhen?: string | null
 }
 
 export interface NamedBatteryPart {
@@ -58,6 +72,9 @@ export interface AppConfig {
   /** Usable storage capacity in kWh (all packs). */
   batteryCapacityKwh: number | null
   growatt: GrowattConfig
+  /** Plant location for PV forecast only; null disables forecast. */
+  plantLatitude: number | null
+  plantLongitude: number | null
 }
 
 export const DEFAULT_ENTITIES: EntityMap = {
@@ -90,24 +107,35 @@ export function inferredPvTodayEnergyIds(entityId: string): string[] {
   return [`${m[1]}${m[2]}_energy_today`, `${m[1]}${m[2]}_generation_today`]
 }
 
+const PV_GEOMETRY_NULL = {
+  azimuthDeg: null,
+  tiltDeg: null,
+  kWp: null,
+  shading: null,
+  shadingWhen: null,
+} as const
+
 export const DEFAULT_PV_FIELDS: NamedPowerSensor[] = [
   {
     id: 'pv1',
     name: 'PV1',
     entityId: DEFAULT_ENTITIES.pv1Power,
     tempEntityId: inferredPvTempEntity(DEFAULT_ENTITIES.pv1Power),
+    ...PV_GEOMETRY_NULL,
   },
   {
     id: 'pv2',
     name: 'PV2',
     entityId: DEFAULT_ENTITIES.pv2Power,
     tempEntityId: inferredPvTempEntity(DEFAULT_ENTITIES.pv2Power),
+    ...PV_GEOMETRY_NULL,
   },
   {
     id: 'pv3',
     name: 'PV3',
     entityId: DEFAULT_ENTITIES.pv3Power,
     tempEntityId: '',
+    ...PV_GEOMETRY_NULL,
   },
 ]
 
@@ -147,6 +175,11 @@ export function newNamedSensor(name: string, entityId = ''): NamedPowerSensor {
     name,
     entityId,
     tempEntityId: '',
+    azimuthDeg: null,
+    tiltDeg: null,
+    kWp: null,
+    shading: null,
+    shadingWhen: null,
   }
 }
 
@@ -157,6 +190,38 @@ export function newBatteryPart(name: string): NamedBatteryPart {
     socEntityId: '',
     tempEntityId: '',
   }
+}
+
+function parseNullableNumber(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string' && raw.trim()) {
+    const n = Number(raw.replace(',', '.'))
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function parsePositiveKwp(raw: unknown): number | null {
+  const n = parseNullableNumber(raw)
+  return n !== null && n > 0 ? n : null
+}
+
+function parsePvShading(raw: unknown): PvShading | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string' && PV_SHADING_VALUES.includes(raw as PvShading)) {
+    return raw as PvShading
+  }
+  return null
+}
+
+function parseNullableString(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string') {
+    const t = raw.trim()
+    return t ? t : null
+  }
+  return null
 }
 
 function parseNamedList(raw: unknown, fallback: NamedPowerSensor[]): NamedPowerSensor[] {
@@ -172,18 +237,27 @@ function parseNamedList(raw: unknown, fallback: NamedPowerSensor[]): NamedPowerS
       (typeof o.tempEntityId === 'string' ? o.tempEntityId.trim() : '') ||
       inferredPvTempEntity(entityId)
     const peakRaw = o.peakW
-    const peakW =
+    let peakW =
       typeof peakRaw === 'number' && Number.isFinite(peakRaw) && peakRaw > 0
         ? peakRaw
         : typeof peakRaw === 'string'
           ? Number(peakRaw) || undefined
           : undefined
+    const kWp = parsePositiveKwp(o.kWp)
+    if ((!peakW || peakW <= 0) && kWp !== null) {
+      peakW = kWp * 1000
+    }
     out.push({
       id,
       name,
       entityId,
       tempEntityId,
       peakW: peakW && peakW > 0 ? peakW : undefined,
+      azimuthDeg: parseNullableNumber(o.azimuthDeg),
+      tiltDeg: parseNullableNumber(o.tiltDeg),
+      kWp,
+      shading: parsePvShading(o.shading),
+      shadingWhen: parseNullableString(o.shadingWhen),
     })
   }
   return out.length ? out : fallback.map((f) => ({ ...f }))
@@ -315,6 +389,18 @@ function migrateEntities(entities: EntityMap): EntityMap {
   return next
 }
 
+function parseLatitude(raw: unknown): number | null {
+  const n = parseNullableNumber(raw)
+  if (n === null || n < -90 || n > 90) return null
+  return n
+}
+
+function parseLongitude(raw: unknown): number | null {
+  const n = parseNullableNumber(raw)
+  if (n === null || n < -180 || n > 180) return null
+  return n
+}
+
 export function defaultConfig(): AppConfig {
   return {
     haUrl: import.meta.env.VITE_HA_URL ?? '',
@@ -327,6 +413,8 @@ export function defaultConfig(): AppConfig {
     batteryParts: DEFAULT_BATTERY_PARTS.map((f) => ({ ...f })),
     batteryCapacityKwh: null,
     growatt: { ...DEFAULT_GROWATT },
+    plantLatitude: null,
+    plantLongitude: null,
   }
 }
 
@@ -355,7 +443,15 @@ export function loadConfig(): AppConfig {
       pvFields: parseNamedList(parsed.pvFields, pvFieldsFromLegacy(entities)),
       batteryParts: parseBatteryParts(parsed.batteryParts, DEFAULT_BATTERY_PARTS),
       batteryCapacityKwh: parseCapacityKwh(parsed.batteryCapacityKwh),
-      growatt: parseGrowatt(parsed.growatt, DEFAULT_GROWATT),
+      growatt: (() => {
+        const g = parseGrowatt(parsed.growatt, DEFAULT_GROWATT)
+        if (isNativePlatform()) {
+          return { ...g, token: '' }
+        }
+        return g
+      })(),
+      plantLatitude: parseLatitude(parsed.plantLatitude),
+      plantLongitude: parseLongitude(parsed.plantLongitude),
     }
   } catch {
     return base
@@ -363,6 +459,15 @@ export function loadConfig(): AppConfig {
 }
 
 export function saveConfig(config: AppConfig): void {
+  if (isNativePlatform()) {
+    void setGrowattToken(config.growatt.token)
+    const toStore: AppConfig = {
+      ...config,
+      growatt: { ...config.growatt, token: '' },
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
+    return
+  }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
 }
 
@@ -371,4 +476,11 @@ export function entityList(config: AppConfig): string[] {
   const fromPv = config.pvFields.flatMap((f) => [f.entityId, f.tempEntityId ?? ''])
   const fromBatt = config.batteryParts.flatMap((f) => [f.socEntityId, f.tempEntityId])
   return [...fromMap, ...fromPv, ...fromBatt].map(normalizeEntityId).filter(Boolean)
+}
+
+/** Shelly + EcoTracker — they update faster than Growatt. */
+export function fastLiveEntityIds(config: { entities: Pick<EntityMap, 'garagePower' | 'gridPower'> }): string[] {
+  return [config.entities.garagePower, config.entities.gridPower]
+    .map(normalizeEntityId)
+    .filter(Boolean)
 }

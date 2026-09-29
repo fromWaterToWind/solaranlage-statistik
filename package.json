@@ -7,15 +7,22 @@
     "dev": "vite --host",
     "build": "tsc -b && vite build --base /solar-statistik/",
     "build:hacs": "npm run build && rm -rf custom_components/solar_statistik/www && cp -R dist custom_components/solar_statistik/www",
+    "build:ios": "tsc -b && vite build --base ./ && npx cap sync ios",
     "preview": "vite preview --base /solar-statistik/",
     "test": "vitest run"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.1",
+    "@capacitor/core": "^8.5.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0"
   },
   "devDependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
+    "@capacitor/keyboard": "^8.0.5",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

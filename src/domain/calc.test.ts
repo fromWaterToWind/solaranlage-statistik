@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   acOutputKwh,
+  eigenverbrauchKwh,
   formatEur,
   formatFlowW,
   formatKw,
   formatKwh,
   formatPercent,
   formatWattAxis,
+  homeKwhFromWrAc,
   kwhFromSoc,
+  reconcileHomeAndSelf,
+  selfKwhFromPoint,
   storageLossFromBalance,
   sumMpptW,
   totalsFromFlows,
@@ -183,6 +187,23 @@ describe('totalsFromFlows', () => {
   })
 })
 
+describe('reconcileHomeAndSelf', () => {
+  it('lifts Verbrauch when Eigenverbrauch is larger', () => {
+    expect(reconcileHomeAndSelf(1.2, 2.1)).toEqual({ homeKwh: 2.1, selfKwh: 2.1 })
+  })
+
+  it('keeps Verbrauch when it already covers Eigenverbrauch', () => {
+    expect(reconcileHomeAndSelf(10, 6)).toEqual({ homeKwh: 10, selfKwh: 6 })
+  })
+})
+
+describe('selfKwhFromPoint', () => {
+  it('never returns more than house consumption when derived', () => {
+    expect(selfKwhFromPoint(1.2, 0)).toBe(1.2)
+    expect(selfKwhFromPoint(1.2, 0.4)).toBeCloseTo(0.8, 5)
+  })
+})
+
 describe('formatters', () => {
   it('formats watts and never switches to kW', () => {
     expect(formatKw(350)).toBe('350 W')
@@ -248,5 +269,27 @@ describe('kwhFromSoc', () => {
 describe('acOutputKwh', () => {
   it('matches Zufluss = Verbrauch − Bezug + Einspeisung', () => {
     expect(acOutputKwh(173.7, 96.9, 34.7)).toBeCloseTo(111.5, 5)
+  })
+})
+
+describe('eigenverbrauchKwh', () => {
+  it('is Verbrauch minus Netzbezug when that is positive', () => {
+    expect(eigenverbrauchKwh({ homeKwh: 8, importKwh: 3, exportKwh: 1 })).toBe(5)
+  })
+
+  it('uses WR AC minus Einspeisung when Verbrauch was only the import floor', () => {
+    expect(
+      eigenverbrauchKwh({ homeKwh: 4, importKwh: 4, exportKwh: 0, outputKwh: 4.32 }),
+    ).toBe(4.32)
+  })
+})
+
+describe('homeKwhFromWrAc', () => {
+  it('is Eigenverbrauch + Netzbezug', () => {
+    expect(homeKwhFromWrAc(1.34, 2, 0.4)).toBe(2.94)
+  })
+
+  it('never drops below Netzbezug', () => {
+    expect(homeKwhFromWrAc(0, 4.2, 12)).toBe(4.2)
   })
 })

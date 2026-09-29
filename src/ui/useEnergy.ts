@@ -4,11 +4,17 @@ import { applyGrowattDay, fetchGrowattDay, isBeforeNexa } from '@/data/growatt'
 import { formatDay, getGrowattDay } from '@/data/growattStore'
 import { createEnergySource } from '@/data/source'
 import { mergeManualPeriod, type ManualMonth } from '@/domain/manualMonth'
+import { applyManualDays, type ManualDay } from '@/domain/manualDay'
 import {
   buildProductionCompare,
   stubPeriodStats,
   type ProductionCompare,
 } from '@/domain/productionCompare'
+import { fetchDayRadiation } from '@/data/forecastWeather'
+import {
+  buildPvForecastSeries,
+  mergeForecastIntoPowerSeries,
+} from '@/domain/forecast'
 import type { LiveSnapshot, PeriodKind, PeriodStats } from '@/domain/types'
 
 function startOfToday(): Date {
@@ -82,7 +88,11 @@ export interface EnergyState {
   loadingProduction: boolean
 }
 
-export function useEnergy(config: AppConfig, manualMonths: ManualMonth[] = []): EnergyState {
+export function useEnergy(
+  config: AppConfig,
+  manualMonths: ManualMonth[] = [],
+  manualDays: ManualDay[] = [],
+): EnergyState {
   const source = useMemo(() => createEnergySource(config), [config])
   const [live, setLive] = useState<LiveSnapshot | null>(null)
   const [haPeriod, setHaPeriod] = useState<PeriodStats | null>(null)
@@ -93,6 +103,9 @@ export function useEnergy(config: AppConfig, manualMonths: ManualMonth[] = []): 
   const [growattBusy, setGrowattBusy] = useState(false)
   const [production, setProduction] = useState<ProductionCompare | null>(null)
   const [loadingProduction, setLoadingProduction] = useState(true)
+  const [dayForecast, setDayForecast] = useState<{ t: string; pvWForecast: number }[] | null>(
+    null,
+  )
 
   useEffect(() => {
     return source.subscribeLive(setLive)
@@ -114,22 +127,40 @@ export function useEnergy(config: AppConfig, manualMonths: ManualMonth[] = []): 
         setLoadingProduction(false)
         return
       }
-      const todayMerged = mergeManualPeriod(todayRes.value, manualMonths, config.tariff, now)
-      const thisMonth =
-        thisMonthRes.status === 'fulfilled'
-          ? thisMonthRes.value
-          : stubPeriodStats('month', now)
-      const prevMonth =
-        prevMonthRes.status === 'fulfilled'
-          ? prevMonthRes.value
-          : stubPeriodStats('month', lastMonth)
+      const todayMerged = applyManualDays(
+        mergeManualPeriod(todayRes.value, manualMonths, config.tariff, now),
+        manualDays,
+        config.tariff,
+      )
+      const thisMonth = applyManualDays(
+        mergeManualPeriod(
+          thisMonthRes.status === 'fulfilled' ? thisMonthRes.value : stubPeriodStats('month', now),
+          manualMonths,
+          config.tariff,
+          now,
+        ),
+        manualDays,
+        config.tariff,
+      )
+      const prevMonth = applyManualDays(
+        mergeManualPeriod(
+          prevMonthRes.status === 'fulfilled'
+            ? prevMonthRes.value
+            : stubPeriodStats('month', lastMonth),
+          manualMonths,
+          config.tariff,
+          lastMonth,
+        ),
+        manualDays,
+        config.tariff,
+      )
       setProduction(buildProductionCompare(todayMerged, thisMonth, prevMonth, now))
       setLoadingProduction(false)
     })
     return () => {
       cancelled = true
     }
-  }, [source, manualMonths, config.tariff])
+  }, [source, manualMonths, manualDays, config.tariff])
 
   useEffect(() => {
     let cancelled = false
@@ -165,10 +196,43 @@ export function useEnergy(config: AppConfig, manualMonths: ManualMonth[] = []): 
     }
   }, [kind, date, source])
 
-  const period = useMemo(
-    () => (haPeriod ? mergeManualPeriod(haPeriod, manualMonths, config.tariff, date) : null),
-    [haPeriod, manualMonths, config.tariff, date],
-  )
+  useEffect(() => {
+    let cancelled = false
+    if (kind !== 'day') {
+      setDayForecast(null)
+      return
+    }
+    const lat = config.plantLatitude
+    const lon = config.plantLongitude
+    if (lat == null || lon == null) {
+      setDayForecast(null)
+      return
+    }
+    void fetchDayRadiation(lat, lon, date).then(({ samples, fault }) => {
+      if (cancelled) return
+      if (fault || !samples.length) {
+        setDayForecast(null)
+        return
+      }
+      setDayForecast(buildPvForecastSeries(lat, config.pvFields, samples))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [kind, date, config.plantLatitude, config.plantLongitude, config.pvFields])
+
+  const period = useMemo(() => {
+    if (!haPeriod) return null
+    const withDays = applyManualDays(haPeriod, manualDays, config.tariff)
+    let merged = mergeManualPeriod(withDays, manualMonths, config.tariff, date)
+    if (kind === 'day' && dayForecast?.length && merged.powerSeries?.length) {
+      merged = {
+        ...merged,
+        powerSeries: mergeForecastIntoPowerSeries(merged.powerSeries, dayForecast),
+      }
+    }
+    return merged
+  }, [haPeriod, manualMonths, manualDays, config.tariff, date, kind, dayForecast])
 
   const setKind = useCallback((next: PeriodKind) => {
     setKindState(next)

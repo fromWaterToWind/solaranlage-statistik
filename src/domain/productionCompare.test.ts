@@ -89,4 +89,17 @@ describe('buildProductionCompare', () => {
     expect(compare.mppts[0]?.name).toBe('PV NEU')
     expect(compare.mppts[0]?.kwh).toBe(4.2)
   })
+
+  it('scales a Nachtrag month that has totals but no daily series', () => {
+    const now = new Date(2026, 8, 24)
+    const compare = buildProductionCompare(
+      stats('day', 10, []),
+      stats('month', 300, []),
+      stats('month', 248, []),
+      now,
+    )
+    expect(compare.month.kwh).toBeCloseTo(300 * (23 / 30) + 10, 5)
+    expect(compare.month.prevKwh).toBeCloseTo(248 * (24 / 31), 5)
+    expect(compare.month.deltaPercent).not.toBeNull()
+  })
 })

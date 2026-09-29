@@ -95,6 +95,19 @@ function round3(n: number): number {
   return Math.round(n * 1000) / 1000
 }
 
+/** Eigenverbrauch from inverter AC: WR AC − Einspeisung, never negative. */
+export function selfKwhFromWrAc(wrAcKwh: Kwh, exportKwh: Kwh): Kwh {
+  const wr = Number.isFinite(wrAcKwh) ? wrAcKwh : 0
+  const exp = Number.isFinite(exportKwh) ? exportKwh : 0
+  return round3(Math.max(0, wr - exp))
+}
+
+/** Verbrauch = Eigenverbrauch + Netzbezug, with Eigenverbrauch from WR AC. */
+export function homeKwhFromWrAc(wrAcKwh: Kwh, importKwh: Kwh, exportKwh: Kwh): Kwh {
+  const imp = Number.isFinite(importKwh) ? importKwh : 0
+  return round3(selfKwhFromWrAc(wrAcKwh, exportKwh) + Math.max(0, imp))
+}
+
 /** AC after the inverter: Verbrauch − Netzbezug + Einspeisung. */
 export function acOutputKwh(homeKwh: Kwh, gridImportKwh: Kwh, gridExportKwh: Kwh): Kwh {
   return homeKwh - gridImportKwh + gridExportKwh
@@ -111,8 +124,55 @@ export function kwhFromSoc(
 }
 
 export function selfKwhFromPoint(homeKwh: Kwh, gridImportKwh: Kwh, explicit?: Kwh | null): Kwh {
-  if (explicit != null && Number.isFinite(explicit)) return Math.max(0, explicit)
+  if (explicit != null && Number.isFinite(explicit) && explicit > 0) return Math.max(0, explicit)
   return clamp(homeKwh - gridImportKwh, 0, Math.max(0, homeKwh))
+}
+
+/**
+ * Eigenverbrauch: das Größere aus Verbrauch−Bezug und WR AC−Einspeisung.
+ * An explicit 0 must not hide a positive meter difference.
+ */
+export function eigenverbrauchKwh(args: {
+  homeKwh: Kwh
+  importKwh: Kwh
+  exportKwh?: Kwh
+  outputKwh?: Kwh | null
+  selfKwh?: Kwh | null
+}): Kwh {
+  const fromHome = clamp(args.homeKwh - args.importKwh, 0, Math.max(0, args.homeKwh))
+  const fromWr =
+    args.outputKwh != null && args.outputKwh > 0
+      ? selfKwhFromWrAc(args.outputKwh, args.exportKwh ?? 0)
+      : 0
+  const explicit =
+    args.selfKwh != null && Number.isFinite(args.selfKwh) && args.selfKwh > 0 ? args.selfKwh : 0
+  return Math.max(fromHome, fromWr, explicit)
+}
+
+/** Verbrauch is at least Eigenverbrauch — never the other way around. */
+export function reconcileHomeAndSelf(
+  homeKwh: Kwh,
+  selfKwh: Kwh,
+): { homeKwh: Kwh; selfKwh: Kwh } {
+  const self = Math.max(0, selfKwh)
+  const home = Math.max(0, homeKwh, self)
+  return { homeKwh: home, selfKwh: Math.min(self, home) }
+}
+
+export function applyExplicitSelfUse(
+  totals: EnergyTotals,
+  selfUseKwh: Kwh,
+  productionKwh: Kwh,
+): EnergyTotals {
+  const { homeKwh, selfKwh } = reconcileHomeAndSelf(totals.homeKwh, selfUseKwh)
+  return {
+    ...totals,
+    homeKwh,
+    selfConsumedKwh: selfKwh,
+    autarkyPercent: homeKwh <= 0 ? 0 : clamp((selfKwh / homeKwh) * 100, 0, 100),
+    selfConsumptionPercent:
+      productionKwh <= 0 ? 0 : clamp((selfKwh / productionKwh) * 100, 0, 100),
+  }
 }
 
 /**
@@ -126,7 +186,7 @@ export function storageLossFromBalance(args: {
   storageEndKwh: Kwh | null
 }): { lossKwh: Kwh; lossFault: string | null } {
   if (!Number.isFinite(args.productionKwh) || !Number.isFinite(args.outputKwh)) {
-    return { lossKwh: 0, lossFault: 'Zufluss fehlt' }
+    return { lossKwh: 0, lossFault: 'WR AC fehlt' }
   }
   const start = args.storageStartKwh
   const end = args.storageEndKwh

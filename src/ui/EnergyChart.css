@@ -75,8 +75,15 @@
   background: var(--chip, var(--muted));
 }
 
-.energy-chart__chip.is-off {
-  color: var(--muted);
+.energy-chart__chip.is-hatch::before {
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    -35deg,
+    var(--chip),
+    var(--chip) 1px,
+    transparent 1px,
+    transparent 3.5px
+  );
 }
 
 .energy-chart__chip-kwh {

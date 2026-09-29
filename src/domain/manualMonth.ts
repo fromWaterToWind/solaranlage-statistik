@@ -1,4 +1,11 @@
-import { acOutputKwh, storageLossFromBalance, totalsFromFlows } from './calc'
+import {
+  acOutputKwh,
+  applyExplicitSelfUse,
+  reconcileHomeAndSelf,
+  storageLossFromBalance,
+  totalsFromFlows,
+} from './calc'
+import { bucketSeriesByMonth } from './manualDay'
 import type { EnergyTotals, PeriodStats, SeriesPoint, Tariff } from './types'
 
 export interface ManualMonth {
@@ -18,7 +25,7 @@ export interface ManualMonth {
 
 export const MANUAL_FIELDS = [
   { key: 'productionKwh', label: 'Produktion', hint: 'PV-Erzeugung' },
-  { key: 'houseInflowKwh', label: 'Zufluss Hausnetz', hint: 'AC nach dem Wechselrichter' },
+  { key: 'houseInflowKwh', label: 'WR AC-Ausgabe', hint: 'Wechselrichter-AC ins Hausnetz' },
   { key: 'storageStartKwh', label: 'Speicher Anfang', hint: 'kWh am 1. des Monats' },
   { key: 'storageEndKwh', label: 'Speicher Ende', hint: 'kWh am letzten Tag' },
   {
@@ -53,10 +60,10 @@ export function parseDeNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-export function formatDeInput(n: number | null): string {
+export function formatDeInput(n: number | null, maxDigits = 1): string {
   if (n === null) return ''
   return new Intl.NumberFormat('de-DE', {
-    maximumFractionDigits: 1,
+    maximumFractionDigits: maxDigits,
     minimumFractionDigits: 0,
   }).format(n)
 }
@@ -187,11 +194,7 @@ export function totalsFromManualMonth(row: ManualMonth, tariff: Tariff): EnergyT
     at,
   )
   if (row.selfUseKwh != null) {
-    totals.selfConsumedKwh = row.selfUseKwh
-    totals.selfConsumptionPercent =
-      productionKwh <= 0 ? 0 : Math.min(100, Math.max(0, (row.selfUseKwh / productionKwh) * 100))
-    totals.autarkyPercent =
-      homeKwh <= 0 ? 0 : Math.min(100, Math.max(0, (row.selfUseKwh / homeKwh) * 100))
+    Object.assign(totals, applyExplicitSelfUse(totals, row.selfUseKwh, productionKwh))
   }
   if (row.storageStartKwh == null || row.storageEndKwh == null) {
     if (row.conversionLossKwh != null) {
@@ -203,8 +206,10 @@ export function totalsFromManualMonth(row: ManualMonth, tariff: Tariff): EnergyT
 }
 
 function seriesPointFromManual(year: number, month: number, row: ManualMonth): SeriesPoint {
-  const homeKwh = row.totalUseKwh ?? 0
+  const homeRaw = row.totalUseKwh ?? 0
   const gridImportKwh = row.importKwh ?? 0
+  const rawSelf = row.selfUseKwh ?? Math.max(0, homeRaw - gridImportKwh)
+  const { homeKwh, selfKwh } = reconcileHomeAndSelf(homeRaw, rawSelf)
   return {
     t: new Date(year, month - 1, 1).toISOString(),
     pvKwh: row.productionKwh ?? 0,
@@ -213,7 +218,8 @@ function seriesPointFromManual(year: number, month: number, row: ManualMonth): S
     batteryDischargeKwh: 0,
     gridImportKwh,
     gridExportKwh: row.exportKwh ?? 0,
-    selfKwh: row.selfUseKwh ?? Math.max(0, homeKwh - gridImportKwh),
+    outputKwh: row.houseInflowKwh ?? 0,
+    selfKwh,
   }
 }
 
@@ -226,6 +232,7 @@ function sumPoints(series: SeriesPoint[]): Omit<SeriesPoint, 't'> {
       batteryDischargeKwh: acc.batteryDischargeKwh + p.batteryDischargeKwh,
       gridImportKwh: acc.gridImportKwh + p.gridImportKwh,
       gridExportKwh: acc.gridExportKwh + p.gridExportKwh,
+      outputKwh: (acc.outputKwh ?? 0) + (p.outputKwh ?? 0),
     }),
     {
       pvKwh: 0,
@@ -234,6 +241,7 @@ function sumPoints(series: SeriesPoint[]): Omit<SeriesPoint, 't'> {
       batteryDischargeKwh: 0,
       gridImportKwh: 0,
       gridExportKwh: 0,
+      outputKwh: 0,
     },
   )
 }
@@ -261,8 +269,9 @@ export function mergeManualPeriod(
   }
 
   const year = viewDate.getFullYear()
+  const monthly = bucketSeriesByMonth(stats.series)
   const byMonth = new Map<number, SeriesPoint>()
-  for (const p of stats.series) {
+  for (const p of monthly) {
     byMonth.set(new Date(p.t).getMonth() + 1, p)
   }
 
@@ -283,7 +292,9 @@ export function mergeManualPeriod(
     }
   }
 
-  if (!usedManual) return { ...stats, source: stats.source ?? 'ha' }
+  if (!usedManual) {
+    return { ...stats, series: monthly, source: stats.source ?? 'ha' }
+  }
 
   const summed = sumPoints(series)
   const totals = totalsFromFlows(
@@ -296,6 +307,7 @@ export function mergeManualPeriod(
       gridImportKwh: round1(summed.gridImportKwh),
       gridExportKwh: round1(summed.gridExportKwh),
       mppts: usedHa ? stats.totals.mppts : [],
+      outputKwh: round1(summed.outputKwh ?? 0),
     },
     tariff,
     new Date(year, 0, 1),

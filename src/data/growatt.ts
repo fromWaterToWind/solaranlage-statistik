@@ -1,22 +1,36 @@
 import type { GrowattConfig } from '@/config/appConfig'
 import { floorSubWatt } from './haParse'
 import { getGrowattDay, putGrowattDay } from './growattStore'
+import { isNativePlatform } from './secureToken'
 import type { PowerPoint, Watts } from '@/domain/types'
 
 export interface GrowattDayPoint {
   t: string
   pvW: Watts
   mpptW: Record<string, Watts>
+  mpptTempC?: Record<string, number>
+  /** Inverter AC into the house (|pac|). */
+  outputW?: Watts
   homeW?: Watts
   batteryW?: Watts
   gridW?: Watts
   socPercent?: number | null
   socById?: Record<string, number | null>
+  tempByPack?: Record<string, number>
+  ctFlag?: number
+  chargeSocLimit?: number
+  dischargeSocLimit?: number
+  eacToday?: number
+  eacMonth?: number
+  eacYear?: number
+  eacTotal?: number
+  fault?: string | null
 }
 
 const MIN_INTERVAL_MS = 60_000
 let lastRequestAt = 0
 const dayCache = new Map<string, GrowattDayPoint[]>()
+const dayInflight = new Map<string, Promise<GrowattDayPoint[]>>()
 
 export function formatGrowattDay(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -24,9 +38,131 @@ export function formatGrowattDay(d: Date): string {
 
 const ymd = formatGrowattDay
 
-export function growattApiBase(): string {
-  if (import.meta.env.DEV) return '/growatt'
+export function resolveGrowattApiBase(opts: { dev: boolean; native: boolean }): string {
+  if (opts.dev) return '/growatt'
+  if (opts.native) return 'https://openapi.growatt.com'
   return '/api/solar_statistik/growatt'
+}
+
+export function growattApiBase(): string {
+  return resolveGrowattApiBase({
+    dev: import.meta.env.DEV,
+    native: isNativePlatform(),
+  })
+}
+
+const SLOT_HOURS = 0.25
+const MAX_TAIL_MS = 10 * 60 * 1000
+
+export interface GrowattFlowIntegrals {
+  productionKwh: number
+  outputKwh: number
+  homeKwh: number
+  gridImportKwh: number
+  gridExportKwh: number
+  batteryChargeKwh: number
+  batteryDischargeKwh: number
+  mpptKwh: Record<string, number>
+}
+
+function sameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
+function intervalMs(points: GrowattDayPoint[], index: number, now: Date): number {
+  const t0 = new Date(points[index].t).getTime()
+  if (index + 1 < points.length) {
+    return Math.max(0, new Date(points[index + 1].t).getTime() - t0)
+  }
+  const last = new Date(points[index].t)
+  if (!sameLocalDay(last, now)) return 0
+  return Math.min(Math.max(0, now.getTime() - t0), MAX_TAIL_MS)
+}
+
+function integrateWatts(points: GrowattDayPoint[], pick: (p: GrowattDayPoint) => number, now: Date): number {
+  if (!points.length) return 0
+  let kwh = 0
+  for (let i = 0; i < points.length; i++) {
+    const dtMs = intervalMs(points, i, now)
+    if (!dtMs) continue
+    const w = pick(points[i])
+    if (!(w > 0) && w !== 0) continue
+    kwh += (w * dtMs) / 3_600_000 / 1000
+  }
+  return kwh
+}
+
+/** Integrate watt samples with real Δt between Growatt history points. */
+export function integrateGrowattDayPoints(
+  points: GrowattDayPoint[],
+  now: Date = new Date(),
+): GrowattFlowIntegrals {
+  const sorted = [...points].sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())
+  const mpptIds = new Set<string>()
+  for (const p of sorted) {
+    for (const id of Object.keys(p.mpptW)) mpptIds.add(id)
+  }
+  const mpptKwh: Record<string, number> = {}
+  for (const id of mpptIds) {
+    mpptKwh[id] = integrateWatts(sorted, (p) => p.mpptW[id] ?? 0, now)
+  }
+  return {
+    productionKwh: integrateWatts(sorted, (p) => (p.pvW > 0 ? p.pvW : 0), now),
+    outputKwh: integrateWatts(sorted, (p) => ((p.outputW ?? 0) > 0 ? (p.outputW ?? 0) : 0), now),
+    homeKwh: integrateWatts(sorted, (p) => p.homeW ?? 0, now),
+    gridImportKwh: integrateWatts(sorted, (p) => Math.max(0, p.gridW ?? 0), now),
+    gridExportKwh: integrateWatts(sorted, (p) => Math.max(0, -(p.gridW ?? 0)), now),
+    batteryChargeKwh: integrateWatts(sorted, (p) => Math.max(0, -(p.batteryW ?? 0)), now),
+    batteryDischargeKwh: integrateWatts(sorted, (p) => Math.max(0, p.batteryW ?? 0), now),
+    mpptKwh,
+  }
+}
+
+/** Integrate 15-min watt samples into kWh (each slot = 0.25 h). */
+export function productionKwhFrom15MinSeries(series: PowerPoint[]): number {
+  let sum = 0
+  for (const p of series) {
+    if (p.pvW > 0) sum += (p.pvW * SLOT_HOURS) / 1000
+  }
+  return sum
+}
+
+function bucketGrowattWatts(
+  points: GrowattDayPoint[],
+  pick: (p: GrowattDayPoint) => Watts | undefined,
+): Map<number, { sum: number; n: number }> {
+  const acc = new Map<number, { sum: number; n: number }>()
+  for (const p of points) {
+    const w = pick(p)
+    if (w == null || !(w > 0)) continue
+    const k = bucket15(p.t)
+    if (!Number.isFinite(k)) continue
+    const cur = acc.get(k) ?? { sum: 0, n: 0 }
+    cur.sum += w
+    cur.n += 1
+    acc.set(k, cur)
+  }
+  return acc
+}
+
+function kwhFromGrowattBuckets(buckets: Map<number, { sum: number; n: number }>): number {
+  let sum = 0
+  for (const { sum: s, n } of buckets.values()) {
+    if (n) sum += (s / n) * (SLOT_HOURS / 1000)
+  }
+  return sum
+}
+
+export function productionKwhFromGrowattPoints(points: GrowattDayPoint[], now?: Date): number {
+  return integrateGrowattDayPoints(points, now).productionKwh
+}
+
+export function outputKwhFromGrowattPoints(points: GrowattDayPoint[], now?: Date): number {
+  return integrateGrowattDayPoints(points, now).outputKwh
 }
 
 function num(v: unknown): number | null {
@@ -53,6 +189,24 @@ function stringW(row: Record<string, unknown>, n: number): number {
   const v = num(row[`pv${n}Voltage`] ?? row[`pv${n}_voltage`])
   if (i == null || v == null) return 0
   return floorSubWatt(i * v)
+}
+
+function pvStringPresent(row: Record<string, unknown>, n: number): boolean {
+  if (pickW(row, [`ppv${n}`, `pPv${n}`, `ppv${n}W`])) return true
+  const i = num(row[`pv${n}Current`] ?? row[`pv${n}_current`])
+  const v = num(row[`pv${n}Voltage`] ?? row[`pv${n}_voltage`])
+  return i != null || v != null
+}
+
+function growattPointFault(row: Record<string, unknown>): string | null {
+  const bits: string[] = []
+  const faultStatus = num(row.faultStatus ?? row.fault_status)
+  if (faultStatus != null && faultStatus !== 0) bits.push(`faultStatus=${faultStatus}`)
+  for (let i = 1; i <= 4; i++) {
+    const st = num(row[`battery${i}ProtectStatus`] ?? row[`battery${i}_protect_status`])
+    if (st != null && st !== 0) bits.push(`battery${i}ProtectStatus=${st}`)
+  }
+  return bits.length ? bits.join(' · ') : null
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -146,31 +300,65 @@ export function parseGrowattHistory(payload: unknown): GrowattDayPoint[] {
     if (!when) continue
     const pvW = pickW(row, ['ppv', 'pPv'])
     const mpptW: Record<string, Watts> = {}
+    const mpptTempC: Record<string, number> = {}
     for (let i = 1; i <= 4; i++) {
       const w = stringW(row, i)
       if (w) mpptW[`pv${i}`] = w
+      if (pvStringPresent(row, i)) {
+        const temp = num(row[`pv${i}Temp`] ?? row[`pv${i}_temp`])
+        if (temp != null) mpptTempC[`pv${i}`] = temp
+      }
     }
     const homeN = num(row.totalHouseholdLoad)
     const chargeN = num(row.totalBatteryPackChargingPower)
     const gridN = num(row.ctSelfPower)
+    const pacN = num(row.pac)
+    const onGridN = num(row.onGridPower)
     const socN = num(row.totalBatteryPackSoc)
+    const ctFlagN = num(row.ctFlag ?? row.ct_flag)
     const socById: Record<string, number | null> = {}
+    const tempByPack: Record<string, number> = {}
     for (let i = 1; i <= 4; i++) {
       const serial = String(row[`battery${i}SerialNum`] ?? '').trim()
       if (!serial) continue
       const s = num(row[`battery${i}Soc`])
       if (s != null) socById[`b${i}`] = s
+      const temp = num(row[`battery${i}Temp`] ?? row[`battery${i}_temp`])
+      if (temp != null) tempByPack[`b${i}`] = temp
     }
+    let outputW: Watts | undefined
+    if (pacN != null) outputW = floorSubWatt(Math.abs(pacN))
+    else if (onGridN != null) outputW = floorSubWatt(Math.abs(onGridN))
+
+    const eacToday = num(row.eacToday)
+    const eacMonth = num(row.eacMonth)
+    const eacYear = num(row.eacYear)
+    const eacTotal = num(row.eacTotal)
+    const chargeSocLimit = num(row.chargeSocLimit)
+    const dischargeSocLimit = num(row.dischargeSocLimit)
+    const fault = growattPointFault(row)
+
     out.push({
       t: when.toISOString(),
       pvW,
       mpptW,
+      mpptTempC: Object.keys(mpptTempC).length ? mpptTempC : undefined,
+      outputW,
       homeW: homeN != null ? floorSubWatt(homeN) : undefined,
       // HA: +Discharge. Growatt chargingPower: +Laden / −Entladen.
       batteryW: chargeN != null ? floorSubWatt(-chargeN) : undefined,
       gridW: gridN != null ? floorSubWatt(gridN) : undefined,
       socPercent: socN,
       socById: Object.keys(socById).length ? socById : undefined,
+      tempByPack: Object.keys(tempByPack).length ? tempByPack : undefined,
+      ctFlag: ctFlagN ?? undefined,
+      chargeSocLimit: chargeSocLimit ?? undefined,
+      dischargeSocLimit: dischargeSocLimit ?? undefined,
+      eacToday: eacToday ?? undefined,
+      eacMonth: eacMonth ?? undefined,
+      eacYear: eacYear ?? undefined,
+      eacTotal: eacTotal ?? undefined,
+      fault,
     })
   }
   if (out.length) return out.sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())
@@ -207,10 +395,12 @@ export function parseGrowattChart(payload: unknown, day: string): GrowattDayPoin
     const nested = asRecord(value) ?? { ppv: value }
     const when = parseRowTime({ time: `${day} ${clockTime(time)}` })
     if (!when) continue
+    const pacN = nested ? num(nested.pac) : null
     out.push({
       t: when.toISOString(),
-      pvW: pickW(nested, ['ppv', 'pPv']),
+      pvW: pickW(nested ?? {}, ['ppv', 'pPv']),
       mpptW: {},
+      outputW: pacN != null ? floorSubWatt(Math.abs(pacN)) : undefined,
     })
   }
   return out.sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())
@@ -626,20 +816,32 @@ export async function fetchGrowattDay(config: GrowattConfig, date: Date): Promis
     dayCache.set(cacheKey, stored.points)
     return stored.points
   }
-  if (cooldownSecs() > 0) throw rateLimitError()
 
-  const json = await growattPost(token, '/v4/new-api/queryHistoricalData', growattHistoryForm(config, date))
-  const err = growattError(json)
-  if (err) throw new Error(isRateLimited(json, err) ? rateLimitError().message : err)
-  const points = parseGrowattHistory(json)
-  const chart = points.length ? points : parseGrowattChart(json, day)
-  dayCache.set(cacheKey, chart)
-  await putGrowattDay({
-    day,
-    sn,
-    points: chart,
-    fetchedAt: new Date().toISOString(),
-  })
-  if (!chart.length) return []
-  return chart
+  const pending = dayInflight.get(cacheKey)
+  if (pending) return pending
+
+  const fetchPromise = (async (): Promise<GrowattDayPoint[]> => {
+    if (cooldownSecs() > 0) throw rateLimitError()
+
+    const json = await growattPost(token, '/v4/new-api/queryHistoricalData', growattHistoryForm(config, date))
+    const err = growattError(json)
+    if (err) throw new Error(isRateLimited(json, err) ? rateLimitError().message : err)
+    const points = parseGrowattHistory(json)
+    const chart = points.length ? points : parseGrowattChart(json, day)
+    dayCache.set(cacheKey, chart)
+    await putGrowattDay({
+      day,
+      sn,
+      points: chart,
+      fetchedAt: new Date().toISOString(),
+    })
+    return chart
+  })()
+
+  dayInflight.set(cacheKey, fetchPromise)
+  try {
+    return await fetchPromise
+  } finally {
+    dayInflight.delete(cacheKey)
+  }
 }

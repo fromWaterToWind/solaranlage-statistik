@@ -4,3 +4,13 @@ dist
 *.local
 .DS_Store
 coverage
+
+# Capacitor / iOS (generate with `npx cap add ios`)
+ios/App/Pods/
+ios/App/build/
+ios/App/DerivedData/
+ios/App/App/public/
+ios/.gitignore
+*.xcuserstate
+*.xcuserdata
+DerivedData/

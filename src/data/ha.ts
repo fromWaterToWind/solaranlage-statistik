@@ -1,10 +1,11 @@
-import { kwhFromSoc, totalsFromFlows } from '@/domain/calc'
+import { kwhFromSoc, selfKwhFromWrAc, totalsFromFlows } from '@/domain/calc'
 import { savingsFromSeries } from '@/domain/tariff'
 import type { AppConfig, EntityMap, NamedBatteryPart, NamedPowerSensor } from '@/config/appConfig'
 import {
   DEFAULT_BATTERY_PARTS,
   DEFAULT_PV_FIELDS,
   entityList,
+  fastLiveEntityIds,
   inferredPvTempEntity,
   inferredPvTodayEnergyIds,
   normalizeEntityId,
@@ -149,41 +150,6 @@ function round3(n: number): number {
   return Math.round(n * 1000) / 1000
 }
 
-function bucketByMonth(daily: SeriesPoint[]): SeriesPoint[] {
-  const months = new Map<number, SeriesPoint>()
-  for (const p of daily) {
-    const d = new Date(p.t)
-    const key = d.getFullYear() * 12 + d.getMonth()
-    const cur = months.get(key) ?? {
-      t: new Date(d.getFullYear(), d.getMonth(), 1).toISOString(),
-      pvKwh: 0,
-      homeKwh: 0,
-      batteryChargeKwh: 0,
-      batteryDischargeKwh: 0,
-      gridImportKwh: 0,
-      gridExportKwh: 0,
-    }
-    cur.pvKwh += p.pvKwh
-    cur.homeKwh += p.homeKwh
-    cur.batteryChargeKwh += p.batteryChargeKwh
-    cur.batteryDischargeKwh += p.batteryDischargeKwh
-    cur.gridImportKwh += p.gridImportKwh
-    cur.gridExportKwh += p.gridExportKwh
-    months.set(key, cur)
-  }
-  return [...months.values()]
-    .map((p) => ({
-      ...p,
-      pvKwh: round3(p.pvKwh),
-      homeKwh: round3(p.homeKwh),
-      batteryChargeKwh: round3(p.batteryChargeKwh),
-      batteryDischargeKwh: round3(p.batteryDischargeKwh),
-      gridImportKwh: round3(p.gridImportKwh),
-      gridExportKwh: round3(p.gridExportKwh),
-    }))
-    .sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())
-}
-
 function isSameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -216,6 +182,7 @@ function seriesFromEnergyStats(
         batteryDischargeKwh: 0,
         gridImportKwh: 0,
         gridExportKwh: 0,
+        outputKwh: 0,
       }
       byStart.set(k, p)
     }
@@ -223,7 +190,7 @@ function seriesFromEnergyStats(
   }
 
   for (const row of stats[keys.pv] ?? []) ensure(row).pvKwh = round3(energyKwhFromRow(row, bucket))
-  for (const row of stats[keys.home] ?? []) ensure(row).homeKwh = round3(energyKwhFromRow(row, bucket))
+  for (const row of stats[keys.home] ?? []) ensure(row).outputKwh = round3(energyKwhFromRow(row, bucket))
   for (const row of stats[keys.exp] ?? []) ensure(row).gridExportKwh = round3(energyKwhFromRow(row, bucket))
   for (const row of stats[keys.imp] ?? []) ensure(row).gridImportKwh = round3(energyKwhFromRow(row, bucket))
 
@@ -239,8 +206,9 @@ function sumSeries(series: SeriesPoint[]) {
       homeKwh: acc.homeKwh + p.homeKwh,
       gridImportKwh: acc.gridImportKwh + p.gridImportKwh,
       gridExportKwh: acc.gridExportKwh + p.gridExportKwh,
+      outputKwh: acc.outputKwh + (p.outputKwh ?? 0),
     }),
-    { productionKwh: 0, homeKwh: 0, gridImportKwh: 0, gridExportKwh: 0 },
+    { productionKwh: 0, homeKwh: 0, gridImportKwh: 0, gridExportKwh: 0, outputKwh: 0 },
   )
 }
 
@@ -365,7 +333,12 @@ export class HomeAssistantEnergySource implements EnergySource {
 
   constructor(private readonly config: AppConfig) {
     try {
-      this.client = createHaClient(config.haUrl, config.haToken, watchedEntityIds(config))
+      this.client = createHaClient(
+        config.haUrl,
+        config.haToken,
+        watchedEntityIds(config),
+        fastLiveEntityIds(config),
+      )
     } catch (e) {
       this.clientError = e instanceof Error ? e : new Error(String(e))
     }
@@ -483,13 +456,14 @@ export class HomeAssistantEnergySource implements EnergySource {
     }
 
     let series = seriesFromEnergyStats(e, energyStats, energyPeriod)
-    series = series.map((p) => ({
-      ...p,
-      homeKwh: homeKwhFromShellyAndGrid(p.homeKwh, p.gridImportKwh, p.gridExportKwh),
-    }))
-    if (kind === 'year') {
-      series = bucketByMonth(series)
-    }
+    series = series.map((p) => {
+      const outputKwh = p.outputKwh ?? 0
+      return {
+        ...p,
+        homeKwh: homeKwhFromShellyAndGrid(outputKwh, p.gridImportKwh, p.gridExportKwh),
+        selfKwh: outputKwh > 0 ? selfKwhFromWrAc(outputKwh, p.gridExportKwh) : undefined,
+      }
+    })
     const summed = sumSeries(series)
     if (kind === 'day') {
       if (summed.productionKwh === 0) {
@@ -502,6 +476,9 @@ export class HomeAssistantEnergySource implements EnergySource {
         summed.gridExportKwh = lastCumulativeKwh(energyStats[e.exp] ?? [])
       }
       const shellyDay = lastCumulativeKwh(energyStats[e.home] ?? [])
+      if ((summed.outputKwh ?? 0) === 0 && shellyDay > 0) {
+        summed.outputKwh = shellyDay
+      }
       if (summed.homeKwh === 0 && (shellyDay > 0 || summed.gridImportKwh > 0)) {
         summed.homeKwh = homeKwhFromShellyAndGrid(
           shellyDay,
@@ -559,7 +536,12 @@ export class HomeAssistantEnergySource implements EnergySource {
     }
 
     if ((kind === 'month' || kind === 'year') && plan) {
-      series = mergeBatteryKwhIntoSeries(series, powerStats[battId] ?? [], plan.period, kind)
+      series = mergeBatteryKwhIntoSeries(
+        series,
+        powerStats[battId] ?? [],
+        plan.period,
+        kind === 'year' ? 'month' : kind,
+      )
     }
 
     const battInteg = plan
@@ -652,6 +634,7 @@ export class HomeAssistantEnergySource implements EnergySource {
         gridImportKwh: round3(summed.gridImportKwh),
         gridExportKwh: round3(summed.gridExportKwh),
         mppts,
+        outputKwh: round3(summed.outputKwh ?? 0),
         storageStartKwh,
         storageEndKwh,
       },

@@ -49,7 +49,7 @@ function monthSummary(row: ManualMonth): string {
   const bits: string[] = []
   if (row.productionKwh != null) bits.push(`PV ${dash(row.productionKwh)}`)
   if (row.totalUseKwh != null) bits.push(`Haus ${dash(row.totalUseKwh)}`)
-  else if (row.houseInflowKwh != null) bits.push(`Zufluss ${dash(row.houseInflowKwh)}`)
+  else if (row.houseInflowKwh != null) bits.push(`WR ${dash(row.houseInflowKwh)}`)
   return `${bits.join(' · ')} kWh`
 }
 
