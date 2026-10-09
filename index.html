@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solar Buddy</title>
+  <meta name="description" content="Solar Buddy – deine Solaranlage auf dem iPhone. Echte Werte von Growatt, Shelly und Home Assistant.">
+  <!-- Home Assistant login: after signing in, Home Assistant may hand the person back to the Solar Buddy app. -->
+  <link rel="redirect_uri" href="solarbuddy://auth-callback">
+  <link rel="icon" href="icon.png">
+  <style>
+    :root { --bg: #f6f3ea; --fg: #1b1d16; --muted: #5d6152; --accent: #b98a2e; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #121410; --fg: #f2ead3; --muted: #a3a690; --accent: #e3b957; } }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 34rem; margin: 0 auto; padding: 4rem 1rem; }
+    .h-app { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+    .h-app img { width: 72px; height: 72px; border-radius: 16px; }
+    .h-app a { color: var(--fg); text-decoration: none; font-size: 1.75rem; font-weight: 600; }
+    p { margin: 0 0 1rem; }
+    .muted { color: var(--muted); font-size: 0.95rem; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <!-- Home Assistant shows this name and icon on its login screen. -->
+    <div class="h-app">
+      <img src="icon.png" alt="" class="u-logo">
+      <a href="./" class="u-url p-name">Solar Buddy</a>
+    </div>
+    <p>Deine Solaranlage auf dem iPhone: echte Werte von Growatt, Shelly und Home Assistant – live, pro Tag, Monat und Jahr.</p>
+    <p lang="en">Your solar setup on your iPhone: real values from Growatt, Shelly and Home Assistant – live, per day, month and year.</p>
+    <p class="muted">Diese Seite dient auch als Anmelde-Kennung für Home Assistant. Deine Daten bleiben auf deinem iPhone und gehen nur direkt an deine eigenen Geräte und Dienste – nicht über diese Seite.</p>
+    <p class="muted" lang="en">This page also identifies Solar Buddy when you sign in to Home Assistant. Your data stays on your iPhone and only goes directly to your own devices and services – never through this page.</p>
+  </main>
+</body>
+</html>
